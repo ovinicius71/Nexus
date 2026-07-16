@@ -1,0 +1,111 @@
+"""SQLAlchemy ORM models (full schema, per project plan).
+
+Only ``Entry`` (raw capture) is populated in Phase 1. The remaining tables and
+classification columns exist now so later phases (LLM classification, people
+extraction, corrections-as-few-shots) require no migration.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+    relationship,
+)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class Base(DeclarativeBase):
+    """Declarative base for all models."""
+
+
+class Entry(Base):
+    """A single captured message.
+
+    Phase 1 stores ``raw_text`` + ``created_at``. All classification fields are
+    nullable and stay ``None`` until Phase 2.
+    """
+
+    __tablename__ = "entries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+    # --- classification (Phase 2+); nullable, never hallucinated ---
+    type: Mapped[str | None] = mapped_column(String(16), nullable=True)  # idea|task|event|note
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    due_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    priority: Mapped[str | None] = mapped_column(String(16), nullable=True)  # high|medium|low
+    project: Mapped[str | None] = mapped_column(String(120), nullable=True)  # normalized slug
+    status: Mapped[str | None] = mapped_column(String(16), nullable=True)  # open|done|archived
+    llm_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # full model response
+
+    people: Mapped[list["EntryPerson"]] = relationship(
+        back_populates="entry", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        preview = (self.raw_text or "")[:30]
+        return f"<Entry id={self.id} type={self.type!r} raw_text={preview!r}>"
+
+
+class Person(Base):
+    """A person referenced across entries."""
+
+    __tablename__ = "people"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+
+    entries: Mapped[list["EntryPerson"]] = relationship(back_populates="person")
+
+
+class EntryPerson(Base):
+    """Association between an entry and a person."""
+
+    __tablename__ = "entry_people"
+    __table_args__ = (UniqueConstraint("entry_id", "person_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entry_id: Mapped[int] = mapped_column(
+        ForeignKey("entries.id", ondelete="CASCADE"), nullable=False
+    )
+    person_id: Mapped[int] = mapped_column(
+        ForeignKey("people.id", ondelete="CASCADE"), nullable=False
+    )
+
+    entry: Mapped[Entry] = relationship(back_populates="people")
+    person: Mapped[Person] = relationship(back_populates="entries")
+
+
+class Correction(Base):
+    """A user correction to a classified field.
+
+    Central to incremental learning: each correction becomes a few-shot example
+    in later classification prompts (Phase 2).
+    """
+
+    __tablename__ = "corrections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entry_id: Mapped[int] = mapped_column(
+        ForeignKey("entries.id", ondelete="CASCADE"), nullable=False
+    )
+    field: Mapped[str] = mapped_column(String(32), nullable=False)
+    old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    corrected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
