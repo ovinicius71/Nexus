@@ -10,6 +10,9 @@
 # Obsidian export vault
 /vault/
 
+# Personal labeled eval data (keep only the .sample template in the repo)
+evals/examples.jsonl
+
 # Python
 __pycache__/
 *.py[cod]

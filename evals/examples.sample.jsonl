@@ -1,0 +1,5 @@
+{"text": "comprar leite amanha", "type": "task", "due_date": null, "priority": null}
+{"text": "ideia: um app que resume minhas anotacoes da semana", "type": "idea", "due_date": null, "priority": null, "project": null}
+{"text": "reuniao com a Ana sexta as 15h sobre o estagio", "type": "event", "priority": null, "people": ["Ana"], "project": "estagio"}
+{"text": "revisar o capitulo 2 do tcc, urgente", "type": "task", "priority": "high", "project": "tcc"}
+{"text": "o cafe da esquina abre as 7h", "type": "note", "due_date": null, "priority": null}
