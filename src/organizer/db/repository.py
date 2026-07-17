@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..llm.classifier import CorrectionExample
 from ..llm.schema import EntryClassification
-from .models import Correction, Entry, EntryPerson, Person
+from .models import Connection, Correction, Entry, EntryPerson, Person
 
 
 class EntryRepository:
@@ -89,12 +89,59 @@ class EntryRepository:
         stmt = select(Entry).order_by(Entry.created_at.asc(), Entry.id.asc())
         return list(self._session.scalars(stmt))
 
+    def get_by_ids(self, ids: list[int]) -> list[Entry]:
+        """Fetch entries by id, preserving the order of ``ids``."""
+        if not ids:
+            return []
+        found = {e.id: e for e in self._session.scalars(select(Entry).where(Entry.id.in_(ids)))}
+        return [found[i] for i in ids if i in found]
+
     def mark_done(self, entry: Entry) -> Entry:
         """Mark a task as done."""
         entry.status = "done"
         self._session.commit()
         self._session.refresh(entry)
         return entry
+
+    # --- Phase 5: semantic connections ---------------------------------
+
+    def add_pending_connection(
+        self, entry_id: int, related_entry_id: int, similarity: float
+    ) -> Connection:
+        """Record a suggested connection awaiting the user's accept/reject."""
+        connection = Connection(
+            entry_id=entry_id, related_entry_id=related_entry_id, similarity=similarity
+        )
+        self._session.add(connection)
+        self._session.commit()
+        self._session.refresh(connection)
+        return connection
+
+    def get_connection(self, connection_id: int) -> Connection | None:
+        return self._session.get(Connection, connection_id)
+
+    def set_connection_accepted(self, connection_id: int, accepted: bool) -> Connection | None:
+        """Record the user's feedback on a suggested connection."""
+        connection = self._session.get(Connection, connection_id)
+        if connection is None:
+            return None
+        connection.accepted = accepted
+        self._session.commit()
+        self._session.refresh(connection)
+        return connection
+
+    def get_related(self, entry_id: int) -> list[Entry]:
+        """Entries linked to ``entry_id`` via an accepted connection (either direction)."""
+        stmt = select(Connection).where(
+            Connection.accepted.is_(True),
+            or_(Connection.entry_id == entry_id, Connection.related_entry_id == entry_id),
+        )
+        related_ids = []
+        for conn in self._session.scalars(stmt):
+            other = conn.related_entry_id if conn.entry_id == entry_id else conn.entry_id
+            if other not in related_ids:
+                related_ids.append(other)
+        return self.get_by_ids(sorted(related_ids))
 
     # --- Phase 2: classification ---------------------------------------
 

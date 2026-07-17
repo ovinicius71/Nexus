@@ -29,8 +29,11 @@ BOT_COMMANDS = [
 from ..config import Settings
 from ..db.models import Entry
 from ..db.repository import EntryRepository
+from ..embeddings import Embedder
 from ..export import VaultExporter
 from ..llm.classifier import Classifier
+from ..llm.search import Candidate, SearchRanker
+from ..semantic import SemanticIndex
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +153,29 @@ def _classifier(context: ContextTypes.DEFAULT_TYPE) -> Classifier | None:
     return context.application.bot_data.get("classifier")
 
 
+def _embedder(context: ContextTypes.DEFAULT_TYPE) -> Embedder | None:
+    return context.application.bot_data.get("embedder")
+
+
+def _search_ranker(context: ContextTypes.DEFAULT_TYPE) -> SearchRanker | None:
+    return context.application.bot_data.get("search_ranker")
+
+
+def _semantic_index(context: ContextTypes.DEFAULT_TYPE, session: Session) -> SemanticIndex:
+    return SemanticIndex(session, context.application.bot_data["embedding_dim"])
+
+
+def suggestion_keyboard(connection_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🔗 Linkar", callback_data=f"lk:{connection_id}"),
+                InlineKeyboardButton("✕ Ignorar", callback_data=f"nl:{connection_id}"),
+            ]
+        ]
+    )
+
+
 def _entry_id_from_callback(data: str) -> int:
     # data forms: "ok:12", "st:12:task", "sp:12:high"
     return int(data.split(":")[1])
@@ -210,8 +236,37 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         repo.apply_classification(entry, classification, classification.model_dump_json())
         people = repo.get_people(entry)
         text = render_card(entry, people)
+        suggestion = await _index_and_suggest(context, session, repo, entry)
 
     await message.reply_text(text, reply_markup=main_keyboard(entry.id))
+    if suggestion is not None:
+        await message.reply_text(suggestion[0], reply_markup=suggestion_keyboard(suggestion[1]))
+
+
+async def _index_and_suggest(context, session, repo, entry) -> tuple[str, int] | None:
+    """Embed the entry, store it, and (if a close match exists) build a suggestion."""
+    embedder = _embedder(context)
+    if embedder is None:
+        return None
+    index = _semantic_index(context, session)
+    vector = await asyncio.to_thread(embedder.encode, entry.raw_text)
+    matches = index.search(vector, k=1, exclude_id=entry.id)
+    index.upsert(entry.id, vector)
+
+    threshold = context.application.bot_data["similarity_threshold"]
+    if not matches or matches[0][1] < threshold:
+        return None
+    other_id, similarity = matches[0]
+    other = repo.get_by_id(other_id)
+    if other is None:
+        return None
+    connection = repo.add_pending_connection(entry.id, other_id, similarity)
+    when = other.created_at.date().isoformat()
+    text = (
+        f"🔗 Isso lembra a entrada #{other_id} — \"{other.title or other.raw_text[:40]}\" "
+        f"(de {when}, {similarity:.0%} parecido). Quer linkar?"
+    )
+    return text, connection.id
 
 
 # --- callback handlers -----------------------------------------------------
@@ -319,14 +374,106 @@ async def cmd_eventos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(render_list("📅 Eventos:", entries))
 
 
+# For the Haiku-reranked search we cast a wide net (low similarity floor) and let
+# the model provide precision; without a ranker we keep the stricter threshold.
+_RERANK_RECALL_FLOOR = 0.2
+_RERANK_MAX_CANDIDATES = 25
+
+
 async def cmd_buscar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     term = " ".join(context.args).strip() if context.args else ""
     if not term:
         await update.message.reply_text("Uso: /buscar <termo>")
         return
+    ranker = _search_ranker(context)
+    if ranker is not None:
+        await _buscar_reranked(update, context, term, ranker)
+    else:
+        await _buscar_hybrid(update, context, term)
+
+
+async def _buscar_reranked(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, term: str, ranker: SearchRanker
+) -> None:
+    """Gather a wide candidate pool, then let Haiku keep only true matches."""
+    embedder = _embedder(context)
     with _session_factory(context)() as session:
-        entries = EntryRepository(session).search(term)
-    await update.message.reply_text(render_list(f'🔎 Resultados para "{term}":', entries))
+        repo = EntryRepository(session)
+        literal = repo.search(term)
+        literal_ids = {e.id for e in literal}
+        semantic: list[Entry] = []
+        if embedder is not None:
+            vector = await asyncio.to_thread(embedder.encode, term)
+            matches = _semantic_index(context, session).search(vector, k=15)
+            semantic_ids = [
+                mid
+                for mid, sim in matches
+                if sim >= _RERANK_RECALL_FLOOR and mid not in literal_ids
+            ]
+            semantic = repo.get_by_ids(semantic_ids)
+
+        candidates = (literal + semantic)[:_RERANK_MAX_CANDIDATES]
+        if not candidates:
+            await update.message.reply_text(f'🔎 Nada encontrado para "{term}".')
+            return
+
+        payload = [
+            Candidate(id=e.id, text=e.title or e.raw_text[:80], type=e.type) for e in candidates
+        ]
+        ranked_ids = await asyncio.to_thread(ranker.rank, term, payload)
+        # If the model returns nothing, fall back to exact matches so a literal
+        # hit is never silently dropped.
+        results = repo.get_by_ids(ranked_ids) or literal
+
+    if results:
+        await update.message.reply_text(render_list(f'🔎 Resultados para "{term}":', results))
+    else:
+        await update.message.reply_text(f'🔎 Nada encontrado para "{term}".')
+
+
+async def _buscar_hybrid(update: Update, context: ContextTypes.DEFAULT_TYPE, term: str) -> None:
+    """Local-only search: exact matches first, then semantic ones (no API)."""
+    embedder = _embedder(context)
+    with _session_factory(context)() as session:
+        repo = EntryRepository(session)
+        literal = repo.search(term)
+        literal_ids = {e.id for e in literal}
+        related = []
+        if embedder is not None:
+            vector = await asyncio.to_thread(embedder.encode, term)
+            matches = _semantic_index(context, session).search(vector, k=10)
+            threshold = context.application.bot_data["search_threshold"]
+            related_ids = [
+                mid for mid, sim in matches if sim >= threshold and mid not in literal_ids
+            ]
+            related = repo.get_by_ids(related_ids)
+
+    sections = []
+    if literal:
+        sections.append(render_list(f'🔎 Resultados para "{term}":', literal))
+    if related:
+        sections.append(render_list("🔗 Relacionados (por similaridade):", related))
+    if not sections:
+        sections.append(f'🔎 Nada encontrado para "{term}".')
+    await update.message.reply_text("\n\n".join(sections))
+
+
+async def on_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    connection_id = int(query.data.split(":")[1])
+    with _session_factory(context)() as session:
+        EntryRepository(session).set_connection_accepted(connection_id, True)
+    await query.answer("Linkado 🔗")
+    await query.edit_message_text(query.message.text + "\n\n🔗 Conexão salva.")
+
+
+async def on_nolink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    connection_id = int(query.data.split(":")[1])
+    with _session_factory(context)() as session:
+        EntryRepository(session).set_connection_accepted(connection_id, False)
+    await query.answer("Ignorado")
+    await query.edit_message_text(query.message.text + "\n\n✕ Ignorado.")
 
 
 async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -386,6 +533,8 @@ def build_application(
     settings: Settings,
     session_factory: sessionmaker[Session],
     classifier: Classifier | None = None,
+    embedder: Embedder | None = None,
+    search_ranker: SearchRanker | None = None,
 ) -> Application:
     """Wire up the Telegram application with handlers restricted to the owner chat."""
     application = (
@@ -395,6 +544,11 @@ def build_application(
     application.bot_data["allowed_chat_id"] = settings.allowed_chat_id
     application.bot_data["classifier"] = classifier
     application.bot_data["vault_path"] = settings.vault_path
+    application.bot_data["embedder"] = embedder
+    application.bot_data["embedding_dim"] = embedder.dim if embedder is not None else None
+    application.bot_data["similarity_threshold"] = settings.similarity_threshold
+    application.bot_data["search_threshold"] = settings.search_threshold
+    application.bot_data["search_ranker"] = search_ranker
 
     owner_only = filters.Chat(chat_id=settings.allowed_chat_id)
 
@@ -409,6 +563,8 @@ def build_application(
         MessageHandler(owner_only & filters.TEXT & ~filters.COMMAND, handle_text)
     )
     application.add_handler(CallbackQueryHandler(on_done, pattern=r"^done:"))
+    application.add_handler(CallbackQueryHandler(on_link, pattern=r"^lk:"))
+    application.add_handler(CallbackQueryHandler(on_nolink, pattern=r"^nl:"))
     application.add_handler(CallbackQueryHandler(on_confirm, pattern=r"^ok:"))
     application.add_handler(CallbackQueryHandler(on_edit_type, pattern=r"^et:"))
     application.add_handler(CallbackQueryHandler(on_edit_priority, pattern=r"^ep:"))

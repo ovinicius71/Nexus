@@ -21,6 +21,15 @@ class Settings(BaseSettings):
     allowed_chat_id: int
     database_url: str = "sqlite:///organizer.db"
     vault_path: str = "vault"
+    # Phase 5: local semantic memory
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    # Above this, a new entry suggests a connection.
+    similarity_threshold: float = 0.6
+    # Below this, a semantic "related" result in /buscar is dropped as irrelevant.
+    search_threshold: float = 0.45
+    # When true, /buscar sends candidates to Claude Haiku to filter by meaning
+    # (e.g. "sair" also matches "cinema com a Helen"). Needs ANTHROPIC_API_KEY.
+    search_rerank: bool = True
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(

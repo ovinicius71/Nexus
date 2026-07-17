@@ -104,6 +104,19 @@ class VaultExporter:
     def _project_link(self, project: str) -> str:
         return f"[[Projects/{_slugify(project)}|{project}]]"
 
+    def _home_moc_link(self, entry: Entry) -> str:
+        """The note's PARA 'home' MOC — every note up-links here (LYT style)."""
+        if _is_archived(entry):
+            return "[[Archive/Concluidas|Concluídas]]"
+        type_key = _type_of(entry)
+        homes = {
+            "task": "[[Areas/Tarefas|Tarefas]]",
+            "event": "[[Areas/Agenda|Agenda]]",
+            "idea": "[[Resources/Ideias|Ideias]]",
+            "note": "[[Resources/Notas|Notas]]",
+        }
+        return homes[type_key]
+
     def _person_link(self, name: str) -> str:
         return f"[[Areas/People/{_fs_name(name)}|{name}]]"
 
@@ -145,11 +158,16 @@ class VaultExporter:
             }
         )
         body = [front, "", f"# {TYPE_ICON[type_key]} {_title(entry)}", "", entry.raw_text]
-        links = []
+        # Up-link to the note's home MOC (LYT): guarantees every note is
+        # connected in the graph, even without a project or people.
+        links = [f"**Up:** {self._home_moc_link(entry)}"]
         if entry.project:
             links.append(f"**Projeto:** {self._project_link(entry.project)}")
         if people:
             links.append("**Pessoas:** " + " ".join(self._person_link(n) for n in people))
+        related = self._repo.get_related(entry.id)
+        if related:
+            links.append("**Relacionadas:** " + " ".join(self._atomic_link(r) for r in related))
         if links:
             body += ["", "---", *links]
         _write(self._vault / "Slipbox" / f"{_basename(entry)}.md", "\n".join(body).rstrip() + "\n")

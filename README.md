@@ -5,9 +5,9 @@ Você manda tarefas, ideias, eventos e anotações pelo Telegram; o bot classifi
 armazena tudo — e, conforme os dados se acumulam, passa a encontrar conexões e dar dicas sobre
 sua rotina.
 
-> **Status:** Fase 4 (Export para Obsidian) — o bot captura, **classifica com Claude Haiku**,
-> responde a consultas (`/tarefas`, `/hoje`, `/ideias`, `/eventos`, `/buscar`) e **exporta para um
-> vault do Obsidian** (`/export` ou `python -m organizer.export`) com frontmatter YAML e wikilinks.
+> **Status:** Fase 5 (Memória semântica) — além de capturar, classificar, consultar e exportar,
+> o bot gera **embeddings locais** de cada entrada (offline, sem custo), sugere **conexões** entre
+> notas parecidas ("isso se conecta com…") e a `/buscar` passou a ser **semântica**.
 
 ## Visão geral da arquitetura
 
@@ -17,6 +17,8 @@ sua rotina.
 - **Configuração:** `.env` + `pydantic-settings`
 - **IA:** API da Anthropic — Claude Haiku (`claude-haiku-4-5`) para classificação via structured
   output; Claude Sonnet para insights (fase futura)
+- **Memória semântica:** embeddings locais via `sentence-transformers` (offline, sem custo) +
+  `sqlite-vec` para busca por similaridade no próprio SQLite
 
 ### Estrutura do projeto
 
@@ -31,7 +33,9 @@ src/organizer/
 ├── llm/
 │   ├── schema.py      # EntryClassification (pydantic) — saída estruturada
 │   └── classifier.py  # chamada ao Claude Haiku + few-shot das correções
-├── bot/app.py         # handlers do Telegram: texto, card + correção, consultas, concluir, export
+├── embeddings.py      # Embedder local (sentence-transformers, offline)
+├── semantic.py        # SemanticIndex sobre sqlite-vec (busca por similaridade)
+├── bot/app.py         # handlers do Telegram: texto, card + correção, consultas, conexões, export
 ├── export.py          # export para o vault do Obsidian (idempotente)
 └── main.py            # entrypoint
 prompts/classify.md    # prompt de classificação (versionável)
@@ -97,7 +101,24 @@ O script reporta a acurácia por campo (tipo, prazo, prioridade, projeto, pessoa
   uma traz um botão **✔️ Concluir**.
 - `/hoje` — entradas criadas no dia.
 - `/ideias` / `/eventos` — lista por tipo.
-- `/buscar <termo>` — busca simples (`LIKE`) em texto e título; a busca semântica vem na Fase 5.
+- `/buscar <termo>` — busca por **significado**. Com `SEARCH_RERANK=true` (padrão), o bot junta
+  candidatos (match exato + vizinhos semânticos com recall amplo) e o **Claude Haiku** decide quais
+  realmente batem com a intenção. Assim buscar `sair` traz *"cinema com a Helen"* e *"chamar a Manu
+  para sair"* (conceito de sair), enquanto `joão` continua só com as notas do João. Com
+  `SEARCH_RERANK=false`, cai numa **busca híbrida local** (sem custo de API): **Resultados** exatos
+  primeiro, depois **Relacionados** por similaridade acima de `SEARCH_THRESHOLD` (padrão `0.45`).
+
+### Memória semântica e conexões (Fase 5)
+
+Ao salvar uma entrada nova, o bot gera um **embedding local** (offline, sem custo de API) e busca
+as mais parecidas no `sqlite-vec`. Se a similaridade passar do `SIMILARITY_THRESHOLD` (padrão
+`0.6`), ele sugere no Telegram: *"🔗 isso lembra a entrada #X…"* com botões **🔗 Linkar** /
+**✕ Ignorar**. Cada resposta é gravada na tabela `connections` (com a similaridade) para calibrar
+o limiar depois. Conexões aceitas viram uma seção **Relacionadas** com wikilinks no export do
+Obsidian.
+
+- Primeiro uso baixa o modelo (`EMBEDDING_MODEL`, ~120 MB) uma vez.
+- Entradas antigas são indexadas automaticamente ao iniciar o bot.
 
 ### Export para o Obsidian (Fase 4)
 
@@ -127,9 +148,9 @@ Slipbox/<id>-<slug>.md        # Zettelkasten: 1 nota atômica plana por entrada
 ```
 
 - **Zettelkasten:** cada entrada é uma nota atômica em `Slipbox/`, com **frontmatter YAML**
-  (id, type, status, due, priority, project, people, tags). No corpo, **só links com significado**
-  — o projeto e as pessoas (nada de link para "dia" ou "tipo"). É a base para a descoberta de
-  conexões da Fase 5.
+  (id, type, status, due, priority, project, people, tags). No corpo, **só links com significado**:
+  um **up-link** (`Up:`) para o MOC-lar da nota (garante que toda nota fica conectada no grafo,
+  mesmo sem projeto/pessoa) e, quando houver, o projeto e as pessoas. Nada de link para "dia".
 - **PARA (Tiago Forte):** organiza por acionabilidade — `Projects` (com projeto), `Areas`
   (tarefas soltas, agenda, pessoas), `Resources` (ideias/notas), `Archive` (concluídas).
 - **LYT/MOCs (Nick Milo):** cada pasta PARA tem *Maps of Content* que linkam **para baixo** as
@@ -164,5 +185,6 @@ sqlite3 organizer.db "select id, raw_text, created_at from entries;"
 - **Fase 3:** ✅ consultas (`/tarefas`, `/hoje`, `/ideias`, `/eventos`, `/buscar`) + concluir tarefa.
 - **Fase 4:** ✅ export para um vault do Obsidian num híbrido PARA + Zettelkasten + LYT/MOCs
   (`/export` + script, notas atômicas + MOCs, frontmatter YAML + wikilinks).
-- **Fase 5:** memória semântica (embeddings) e sugestão de conexões entre notas.
+- **Fase 5:** ✅ memória semântica (embeddings locais + sqlite-vec), sugestão de conexões e
+  `/buscar` por significado (recall semântico + rerank opcional com Claude Haiku; fallback híbrido local).
 - **Fase 6:** insights e proatividade (`/review` semanal com Claude Sonnet).

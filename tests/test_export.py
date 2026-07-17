@@ -58,11 +58,15 @@ def test_atomic_notes_flat_in_slipbox_with_meaningful_links(session: Session, tm
 
     idea = _read(tmp_path, "Slipbox", "2-app-de-resumo.md")
     assert 'tags: ["idea", "para/resource", "project/estagio"]' in idea
+    assert "**Up:** [[Resources/Ideias|Ideias]]" in idea  # LYT up-link (connects the graph)
     assert "**Projeto:** [[Projects/estagio|estagio]]" in idea
     assert "[[Areas/People/Ana|Ana]]" in idea and "[[Areas/People/Bruno|Bruno]]" in idea
-    # no structural noise: atomic notes don't link to days or type hubs
+    # no structural noise: atomic notes don't link to days
     assert "Journal/" not in idea
-    assert "index/" not in idea
+
+    # a bare note (no project/people) still has an up-link, so it isn't isolated
+    cafe = _read(tmp_path, "Slipbox", "4-cafe.md")
+    assert "**Up:** [[Resources/Notas|Notas]]" in cafe
 
 
 def test_para_folders_and_moc_membership(session: Session, tmp_path) -> None:
@@ -150,6 +154,21 @@ def test_clean_removes_stale_slipbox_note(session: Session, tmp_path) -> None:
 
     assert not (tmp_path / "Slipbox" / "1-titulo-velho.md").exists()  # old slug wiped
     assert (tmp_path / "Slipbox" / "1-titulo-novo.md").exists()
+
+
+def test_export_links_accepted_connections(session: Session, tmp_path) -> None:
+    repo = EntryRepository(session)
+    a = repo.add_raw_entry("primeira ideia")
+    repo.apply_classification(a, EntryClassification(type=EntryType.idea, title="Ideia A"), "{}")
+    b = repo.add_raw_entry("segunda ideia")
+    repo.apply_classification(b, EntryClassification(type=EntryType.idea, title="Ideia B"), "{}")
+    conn = repo.add_pending_connection(a.id, b.id, 0.8)
+    repo.set_connection_accepted(conn.id, True)
+
+    VaultExporter(session, tmp_path).export()
+    note = _read(tmp_path, "Slipbox", f"{a.id}-ideia-a.md")
+    assert "**Relacionadas:**" in note
+    assert f"[[Slipbox/{b.id}-ideia-b|Ideia B]]" in note
 
 
 def test_slugify() -> None:
