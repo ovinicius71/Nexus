@@ -23,11 +23,13 @@ BOT_COMMANDS = [
     BotCommand("ideias", "Suas ideias"),
     BotCommand("eventos", "Seus eventos"),
     BotCommand("buscar", "Buscar por termo"),
+    BotCommand("export", "Exportar para o Obsidian"),
 ]
 
 from ..config import Settings
 from ..db.models import Entry
 from ..db.repository import EntryRepository
+from ..export import VaultExporter
 from ..llm.classifier import Classifier
 
 logger = logging.getLogger(__name__)
@@ -327,6 +329,17 @@ async def cmd_buscar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(render_list(f'🔎 Resultados para "{term}":', entries))
 
 
+async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Export all entries to the Obsidian vault."""
+    vault_path = context.application.bot_data["vault_path"]
+    with _session_factory(context)() as session:
+        result = await asyncio.to_thread(VaultExporter(session, vault_path).export)
+    await update.message.reply_text(
+        f"📤 Export concluído: {result.entries} entrada(s), {result.days} dia(s), "
+        f"{result.projects} projeto(s) e {result.people} pessoa(s) em `{result.vault}`."
+    )
+
+
 async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     entry_id = _entry_id_from_callback(query.data)
@@ -381,6 +394,7 @@ def build_application(
     application.bot_data["session_factory"] = session_factory
     application.bot_data["allowed_chat_id"] = settings.allowed_chat_id
     application.bot_data["classifier"] = classifier
+    application.bot_data["vault_path"] = settings.vault_path
 
     owner_only = filters.Chat(chat_id=settings.allowed_chat_id)
 
@@ -390,6 +404,7 @@ def build_application(
     application.add_handler(CommandHandler("ideias", cmd_ideias, filters=owner_only))
     application.add_handler(CommandHandler("eventos", cmd_eventos, filters=owner_only))
     application.add_handler(CommandHandler("buscar", cmd_buscar, filters=owner_only))
+    application.add_handler(CommandHandler("export", cmd_export, filters=owner_only))
     application.add_handler(
         MessageHandler(owner_only & filters.TEXT & ~filters.COMMAND, handle_text)
     )

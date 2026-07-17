@@ -84,6 +84,11 @@ class EntryRepository:
         )
         return list(self._session.scalars(stmt))
 
+    def list_all(self) -> list[Entry]:
+        """All entries, oldest first (used by the Obsidian export)."""
+        stmt = select(Entry).order_by(Entry.created_at.asc(), Entry.id.asc())
+        return list(self._session.scalars(stmt))
+
     def mark_done(self, entry: Entry) -> Entry:
         """Mark a task as done."""
         entry.status = "done"

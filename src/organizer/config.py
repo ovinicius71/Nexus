@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     allowed_chat_id: int
     database_url: str = "sqlite:///organizer.db"
+    vault_path: str = "vault"
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(
