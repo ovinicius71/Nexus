@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import case, or_, select
 from sqlalchemy.orm import Session
 
 from ..llm.classifier import CorrectionExample
@@ -34,6 +34,62 @@ class EntryRepository:
         """Return the most recent entries, newest first."""
         stmt = select(Entry).order_by(Entry.created_at.desc(), Entry.id.desc()).limit(limit)
         return list(self._session.scalars(stmt))
+
+    # --- Phase 3: queries ----------------------------------------------
+
+    def list_open_tasks(self, limit: int = 50) -> list[Entry]:
+        """Open tasks ordered by due date (soonest first, undated last), then priority."""
+        stmt = (
+            select(Entry)
+            .where(Entry.type == "task", Entry.status == "open")
+            .order_by(
+                Entry.due_date.is_(None),  # dated tasks first
+                Entry.due_date.asc(),
+                _priority_rank().asc(),
+                Entry.created_at.asc(),
+            )
+            .limit(limit)
+        )
+        return list(self._session.scalars(stmt))
+
+    def list_today(self, limit: int = 100) -> list[Entry]:
+        """Entries created during the current (local) day, oldest first."""
+        start, end = _today_bounds()
+        stmt = (
+            select(Entry)
+            .where(Entry.created_at >= start, Entry.created_at < end)
+            .order_by(Entry.created_at.asc())
+            .limit(limit)
+        )
+        return list(self._session.scalars(stmt))
+
+    def list_by_type(self, entry_type: str, limit: int = 50) -> list[Entry]:
+        """Entries of a given type, newest first."""
+        stmt = (
+            select(Entry)
+            .where(Entry.type == entry_type)
+            .order_by(Entry.created_at.desc(), Entry.id.desc())
+            .limit(limit)
+        )
+        return list(self._session.scalars(stmt))
+
+    def search(self, term: str, limit: int = 50) -> list[Entry]:
+        """Free-text search over raw text and title (simple LIKE; semantic later)."""
+        like = f"%{term}%"
+        stmt = (
+            select(Entry)
+            .where(or_(Entry.raw_text.ilike(like), Entry.title.ilike(like)))
+            .order_by(Entry.created_at.desc(), Entry.id.desc())
+            .limit(limit)
+        )
+        return list(self._session.scalars(stmt))
+
+    def mark_done(self, entry: Entry) -> Entry:
+        """Mark a task as done."""
+        entry.status = "done"
+        self._session.commit()
+        self._session.refresh(entry)
+        return entry
 
     # --- Phase 2: classification ---------------------------------------
 
@@ -121,6 +177,28 @@ class EntryRepository:
             self._session.add(person)
             self._session.flush()
         return person
+
+
+def _priority_rank():
+    """SQL rank so high < medium < low < null (unset priority sorts last)."""
+    return case(
+        (Entry.priority == "high", 0),
+        (Entry.priority == "medium", 1),
+        (Entry.priority == "low", 2),
+        else_=3,
+    )
+
+
+def _today_bounds() -> tuple[datetime, datetime]:
+    """Return [start, end) of the current local day as naive-UTC datetimes.
+
+    ``created_at`` is stored as UTC wall-clock (SQLite drops tz), so bounds are
+    converted to UTC and stripped of tzinfo to compare consistently.
+    """
+    now_local = datetime.now().astimezone()
+    start_local = datetime.combine(now_local.date(), time.min, tzinfo=now_local.tzinfo)
+    start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+    return start_utc, start_utc + timedelta(days=1)
 
 
 def _to_datetime(d) -> datetime | None:

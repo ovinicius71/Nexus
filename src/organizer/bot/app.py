@@ -6,7 +6,7 @@ import asyncio
 import logging
 
 from sqlalchemy.orm import Session, sessionmaker
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -16,6 +16,14 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+
+BOT_COMMANDS = [
+    BotCommand("tarefas", "Tarefas abertas"),
+    BotCommand("hoje", "Entradas de hoje"),
+    BotCommand("ideias", "Suas ideias"),
+    BotCommand("eventos", "Seus eventos"),
+    BotCommand("buscar", "Buscar por termo"),
+]
 
 from ..config import Settings
 from ..db.models import Entry
@@ -100,6 +108,32 @@ def priority_keyboard(entry_id: int) -> InlineKeyboardMarkup:
             ],
             [InlineKeyboardButton("⬅️ Voltar", callback_data=f"bk:{entry_id}")],
         ]
+    )
+
+
+PRIORITY_MARK = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+
+
+def format_entry_line(entry: Entry) -> str:
+    """One-line summary of an entry for list views."""
+    icon = {"idea": "💡", "task": "✅", "event": "📅", "note": "📝"}.get(entry.type or "", "•")
+    parts = [f"{icon} #{entry.id} {entry.title or entry.raw_text[:40]}"]
+    if entry.due_date is not None:
+        parts.append(f"🗓 {entry.due_date.date().isoformat()}")
+    if entry.priority:
+        parts.append(PRIORITY_MARK.get(entry.priority, ""))
+    return "  ".join(p for p in parts if p)
+
+
+def render_list(title: str, entries: list[Entry]) -> str:
+    if not entries:
+        return f"{title}\n(nada por aqui)"
+    return "\n".join([title, *(format_entry_line(e) for e in entries)])
+
+
+def done_keyboard(entry_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("✔️ Concluir", callback_data=f"done:{entry_id}")]]
     )
 
 
@@ -248,6 +282,65 @@ async def on_clear_due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _rerender(update, context, "✏️ Prazo removido (vou lembrar disso).")
 
 
+# --- query commands (Phase 3) ----------------------------------------------
+
+
+async def cmd_tarefas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List open tasks, each with a 'Concluir' button."""
+    with _session_factory(context)() as session:
+        tasks = EntryRepository(session).list_open_tasks()
+    if not tasks:
+        await update.message.reply_text("✅ Nenhuma tarefa aberta. 🎉")
+        return
+    await update.message.reply_text(f"✅ Tarefas abertas ({len(tasks)}):")
+    for task in tasks:
+        await update.message.reply_text(
+            format_entry_line(task), reply_markup=done_keyboard(task.id)
+        )
+
+
+async def cmd_hoje(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    with _session_factory(context)() as session:
+        entries = EntryRepository(session).list_today()
+    await update.message.reply_text(render_list("📆 Entradas de hoje:", entries))
+
+
+async def cmd_ideias(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    with _session_factory(context)() as session:
+        entries = EntryRepository(session).list_by_type("idea")
+    await update.message.reply_text(render_list("💡 Ideias:", entries))
+
+
+async def cmd_eventos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    with _session_factory(context)() as session:
+        entries = EntryRepository(session).list_by_type("event")
+    await update.message.reply_text(render_list("📅 Eventos:", entries))
+
+
+async def cmd_buscar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    term = " ".join(context.args).strip() if context.args else ""
+    if not term:
+        await update.message.reply_text("Uso: /buscar <termo>")
+        return
+    with _session_factory(context)() as session:
+        entries = EntryRepository(session).search(term)
+    await update.message.reply_text(render_list(f'🔎 Resultados para "{term}":', entries))
+
+
+async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    entry_id = _entry_id_from_callback(query.data)
+    line = ""
+    with _session_factory(context)() as session:
+        repo = EntryRepository(session)
+        entry = repo.get_by_id(entry_id)
+        if entry is not None:
+            repo.mark_done(entry)
+            line = format_entry_line(entry)
+    await query.answer("Concluída ✔️")
+    await query.edit_message_text(f"{line}\n\n✔️ Concluída.")
+
+
 # --- setup helpers / wiring ------------------------------------------------
 
 
@@ -271,13 +364,20 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.exception("Failed to send error message to user")
 
 
+async def _post_init(application: Application) -> None:
+    """Register the command menu shown in the Telegram UI."""
+    await application.bot.set_my_commands(BOT_COMMANDS)
+
+
 def build_application(
     settings: Settings,
     session_factory: sessionmaker[Session],
     classifier: Classifier | None = None,
 ) -> Application:
     """Wire up the Telegram application with handlers restricted to the owner chat."""
-    application = ApplicationBuilder().token(settings.telegram_bot_token).build()
+    application = (
+        ApplicationBuilder().token(settings.telegram_bot_token).post_init(_post_init).build()
+    )
     application.bot_data["session_factory"] = session_factory
     application.bot_data["allowed_chat_id"] = settings.allowed_chat_id
     application.bot_data["classifier"] = classifier
@@ -285,9 +385,15 @@ def build_application(
     owner_only = filters.Chat(chat_id=settings.allowed_chat_id)
 
     application.add_handler(CommandHandler("start", start, filters=owner_only))
+    application.add_handler(CommandHandler("tarefas", cmd_tarefas, filters=owner_only))
+    application.add_handler(CommandHandler("hoje", cmd_hoje, filters=owner_only))
+    application.add_handler(CommandHandler("ideias", cmd_ideias, filters=owner_only))
+    application.add_handler(CommandHandler("eventos", cmd_eventos, filters=owner_only))
+    application.add_handler(CommandHandler("buscar", cmd_buscar, filters=owner_only))
     application.add_handler(
         MessageHandler(owner_only & filters.TEXT & ~filters.COMMAND, handle_text)
     )
+    application.add_handler(CallbackQueryHandler(on_done, pattern=r"^done:"))
     application.add_handler(CallbackQueryHandler(on_confirm, pattern=r"^ok:"))
     application.add_handler(CallbackQueryHandler(on_edit_type, pattern=r"^et:"))
     application.add_handler(CallbackQueryHandler(on_edit_priority, pattern=r"^ep:"))

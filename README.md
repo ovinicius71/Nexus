@@ -5,9 +5,9 @@ Você manda tarefas, ideias, eventos e anotações pelo Telegram; o bot classifi
 armazena tudo — e, conforme os dados se acumulam, passa a encontrar conexões e dar dicas sobre
 sua rotina.
 
-> **Status:** Fase 2 (Classificação) — o bot recebe texto, salva no SQLite, **classifica com
-> Claude Haiku** (tipo, título, prazo, prioridade, projeto, pessoas) e responde com um card e
-> botões inline para correção. As correções viram few-shot examples nas próximas classificações.
+> **Status:** Fase 3 (Consultas) — além de capturar e **classificar com Claude Haiku**, o bot
+> responde a comandos: `/tarefas`, `/hoje`, `/ideias`, `/eventos` e `/buscar`, e permite marcar
+> tarefas como concluídas por botão inline. As correções da classificação viram few-shot examples.
 
 ## Visão geral da arquitetura
 
@@ -27,11 +27,11 @@ src/organizer/
 ├── db/
 │   ├── models.py      # Entry, Person, EntryPerson, Correction (schema completo)
 │   ├── engine.py      # engine, session factory, init_db()
-│   └── repository.py  # EntryRepository (dados + classificação + correções)
+│   └── repository.py  # EntryRepository (dados + classificação + correções + consultas)
 ├── llm/
 │   ├── schema.py      # EntryClassification (pydantic) — saída estruturada
 │   └── classifier.py  # chamada ao Claude Haiku + few-shot das correções
-├── bot/app.py         # handlers do Telegram: /start, texto, card + botões de correção
+├── bot/app.py         # handlers do Telegram: texto, card + correção, consultas, concluir tarefa
 └── main.py            # entrypoint
 prompts/classify.md    # prompt de classificação (versionável)
 evals/                 # mini-eval de acurácia por campo
@@ -90,6 +90,14 @@ python evals/run_classify_eval.py caminho.jsonl
 
 O script reporta a acurácia por campo (tipo, prazo, prioridade, projeto, pessoas, título).
 
+### Comandos de consulta (Fase 3)
+
+- `/tarefas` — tarefas abertas, ordenadas por prazo (mais próximo primeiro) e prioridade; cada
+  uma traz um botão **✔️ Concluir**.
+- `/hoje` — entradas criadas no dia.
+- `/ideias` / `/eventos` — lista por tipo.
+- `/buscar <termo>` — busca simples (`LIKE`) em texto e título; a busca semântica vem na Fase 5.
+
 ## Testes
 
 ```bash
@@ -109,7 +117,7 @@ sqlite3 organizer.db "select id, raw_text, created_at from entries;"
 
 - **Fase 1:** ✅ bot + persistência (captura crua no SQLite).
 - **Fase 2:** ✅ classificação com Claude Haiku + correções via botões inline (few-shot) + mini-eval.
-- **Fase 3:** consultas (`/tarefas`, `/hoje`, `/ideias`, `/eventos`, `/buscar`).
+- **Fase 3:** ✅ consultas (`/tarefas`, `/hoje`, `/ideias`, `/eventos`, `/buscar`) + concluir tarefa.
 - **Fase 4:** export para um vault do Obsidian (markdown + frontmatter YAML).
 - **Fase 5:** memória semântica (embeddings) e sugestão de conexões entre notas.
 - **Fase 6:** insights e proatividade (`/review` semanal com Claude Sonnet).
