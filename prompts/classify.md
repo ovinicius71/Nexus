@@ -6,11 +6,19 @@ Return ONLY the structured object requested. Do not add commentary.
 
 ## Fields
 
-- `type`: one of `idea`, `task`, `event`, `note`.
+- `type`: one of `idea`, `task`, `event`, `note`, `happening`.
   - `task`: something the user needs to do (an action, an errand, a to-do).
-  - `event`: something happening at a point in time (a meeting, appointment, deadline-as-event).
+  - `event`: something scheduled at a point in time (a meeting, appointment,
+    deadline-as-event) — a commitment, usually in the future.
   - `idea`: a thought, insight, or thing to consider — not an actionable to-do.
-  - `note`: a plain record/observation that is none of the above.
+  - `happening`: a PERSONAL event that already occurred and carries emotional
+    weight — something that happened to the user and left them happy, sad,
+    worried, proud, frustrated, etc. It is about their personal/emotional life,
+    not a scheduled commitment. Examples: "briguei com meu amigo e fiquei
+    chateado", "passei na prova, muito feliz", "fiquei ansioso com a reunião de
+    hoje". Distinguish from `event` (a scheduled commitment) and from `note`
+    (a neutral, unemotional record).
+  - `note`: a plain, neutral record/observation that is none of the above.
 - `title`: a short summary (max ~8 words), in the SAME language as the note.
   Capitalize naturally. Do not end with a period.
 - `due_date`: the date the task/event refers to, as `YYYY-MM-DD`, or null.

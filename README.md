@@ -44,8 +44,10 @@ flowchart TD
 
 ## ✨ Destaques
 
-- 🤖 **Classificação estruturada** com Claude Haiku (*structured output*) e **aprendizado incremental**:
-  cada correção sua vira *few-shot* nas próximas classificações.
+- 🤖 **Classificação estruturada** com Claude Haiku (*structured output*) em **tarefa · evento ·
+  acontecimento · ideia · nota**, com **aprendizado incremental**: cada correção sua vira *few-shot*
+  nas próximas classificações. (📔 *Acontecimento* = um registro pessoal/emocional — algo que te
+  aconteceu e mexeu com você.)
 - 🧭 **Memória semântica local** — embeddings offline (`sentence-transformers`) + `sqlite-vec` no
   próprio banco, **sem custo de API**. Ao salvar uma nota, o bot sugere conexões com as parecidas.
 - 💬 **RAG conversacional** (`/perguntar`) — pergunte em linguagem natural e receba respostas
@@ -71,7 +73,7 @@ no menu do Telegram:
 | `/tarefas` | Tarefas abertas, ordenadas por prazo e prioridade (botão ✔️ **Concluir** em cada) |
 | `/dia` | O que é **para hoje**: tarefas com prazo hoje + atrasadas (⚠️) e eventos do dia |
 | `/hoje` | Entradas **criadas** hoje |
-| `/ideias` · `/eventos` | Lista as entradas por tipo |
+| `/ideias` · `/eventos` · `/acontecimentos` | Lista as entradas por tipo (💡 ideias, 📅 eventos, 📔 acontecimentos pessoais) |
 | `/buscar <termo>` | **Busca por significado**: match exato + vizinhos semânticos filtrados pelo Haiku |
 | `/perguntar <pergunta>` | **RAG**: responde ancorado nas suas notas (Sonnet), citando `#id`/data |
 | `/editar <instrução>` | **Edição natural**: descobre a entrada pelo texto (ou use `/editar #<id> …`) |
@@ -137,7 +139,7 @@ Home.md                        # MOC-raiz (LYT): liga todas as seções
 Projects/<slug>.md             # PARA · trabalho acionável por projeto
 Areas/Tarefas.md · Agenda.md   # PARA · tarefas abertas e eventos
 Areas/People/<nome>.md         # PARA · MOC por pessoa
-Resources/Ideias · Notas · Reviews.md   # PARA · conhecimento e reviews
+Resources/Ideias · Notas · Acontecimentos · Reviews.md   # PARA · conhecimento, acontecimentos e reviews
 Archive/Concluidas.md          # PARA · tarefas concluídas
 Journal/YYYY-MM-DD.md          # log cronológico do dia
 Slipbox/<id>-<slug>.md         # Zettelkasten: 1 nota atômica por entrada

@@ -25,6 +25,7 @@ BOT_COMMANDS = [
     BotCommand("hoje", "Entradas de hoje"),
     BotCommand("ideias", "Suas ideias"),
     BotCommand("eventos", "Seus eventos"),
+    BotCommand("acontecimentos", "Seus acontecimentos"),
     BotCommand("buscar", "Buscar por termo"),
     BotCommand("perguntar", "Perguntar às suas notas (IA)"),
     BotCommand("editar", "Editar uma entrada por texto"),
@@ -56,7 +57,13 @@ WELCOME = (
     "classificação nos botões abaixo de cada mensagem."
 )
 
-TYPE_LABELS = {"idea": "💡 Ideia", "task": "✅ Tarefa", "event": "📅 Evento", "note": "📝 Nota"}
+TYPE_LABELS = {
+    "idea": "💡 Ideia",
+    "task": "✅ Tarefa",
+    "event": "📅 Evento",
+    "note": "📝 Nota",
+    "happening": "📔 Acontecimento",
+}
 PRIORITY_LABELS = {"high": "🔴 Alta", "medium": "🟡 Média", "low": "🟢 Baixa"}
 
 
@@ -106,6 +113,7 @@ def type_keyboard(entry_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("📅 Evento", callback_data=f"st:{entry_id}:event"),
                 InlineKeyboardButton("📝 Nota", callback_data=f"st:{entry_id}:note"),
             ],
+            [InlineKeyboardButton("📔 Acontecimento", callback_data=f"st:{entry_id}:happening")],
             [InlineKeyboardButton("⬅️ Voltar", callback_data=f"bk:{entry_id}")],
         ]
     )
@@ -133,7 +141,9 @@ PRIORITY_MARK = {"high": "🔴", "medium": "🟡", "low": "🟢"}
 
 def format_entry_line(entry: Entry) -> str:
     """One-line summary of an entry for list views."""
-    icon = {"idea": "💡", "task": "✅", "event": "📅", "note": "📝"}.get(entry.type or "", "•")
+    icon = {
+        "idea": "💡", "task": "✅", "event": "📅", "note": "📝", "happening": "📔"
+    }.get(entry.type or "", "•")
     parts = [f"{icon} #{entry.id} {entry.title or entry.raw_text[:40]}"]
     if entry.due_date is not None:
         parts.append(f"🗓 {entry.due_date.date().isoformat()}")
@@ -443,6 +453,12 @@ async def cmd_eventos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     with _session_factory(context)() as session:
         entries = EntryRepository(session).list_by_type("event")
     await update.message.reply_text(render_list("📅 Eventos:", entries))
+
+
+async def cmd_acontecimentos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    with _session_factory(context)() as session:
+        entries = EntryRepository(session).list_by_type("happening")
+    await update.message.reply_text(render_list("📔 Acontecimentos:", entries))
 
 
 # For the Haiku-reranked search we cast a wide net (low similarity floor) and let
@@ -922,6 +938,9 @@ def build_application(
     application.add_handler(CommandHandler("hoje", cmd_hoje, filters=owner_only))
     application.add_handler(CommandHandler("ideias", cmd_ideias, filters=owner_only))
     application.add_handler(CommandHandler("eventos", cmd_eventos, filters=owner_only))
+    application.add_handler(
+        CommandHandler("acontecimentos", cmd_acontecimentos, filters=owner_only)
+    )
     application.add_handler(CommandHandler("buscar", cmd_buscar, filters=owner_only))
     application.add_handler(CommandHandler("perguntar", cmd_perguntar, filters=owner_only))
     application.add_handler(CommandHandler("editar", cmd_editar, filters=owner_only))

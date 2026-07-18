@@ -27,6 +27,7 @@ Output rules:
   CURRENT DATE and output an ISO date (YYYY-MM-DD).
 - Map completion words ("feita", "concluída", "terminei") to `status` = "done";
   "reabrir" to `status` = "open".
-- `type` ∈ idea|task|event|note. `priority` ∈ high|medium|low. Keep `title` short.
+- `type` ∈ idea|task|event|note|happening (happening = acontecimento pessoal/emocional).
+  `priority` ∈ high|medium|low. Keep `title` short.
 
 If the instruction asks for nothing actionable, return an empty `fields_to_update`.

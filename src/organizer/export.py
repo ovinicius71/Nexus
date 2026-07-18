@@ -37,9 +37,12 @@ from .db.repository import EntryRepository
 
 logger = logging.getLogger(__name__)
 
-TYPE_ICON = {"task": "✅", "idea": "💡", "event": "📅", "note": "📝"}
-TYPE_LABEL = {"task": "Tarefas", "idea": "Ideias", "event": "Eventos", "note": "Notas"}
-TYPE_ORDER = ["task", "event", "idea", "note"]
+TYPE_ICON = {"task": "✅", "idea": "💡", "event": "📅", "note": "📝", "happening": "📔"}
+TYPE_LABEL = {
+    "task": "Tarefas", "idea": "Ideias", "event": "Eventos",
+    "note": "Notas", "happening": "Acontecimentos",
+}
+TYPE_ORDER = ["task", "event", "happening", "idea", "note"]
 PRIORITY_MARK = {"high": "🔴", "medium": "🟡", "low": "🟢"}
 
 # Folders (and Home.md) regenerated every run. Includes the legacy Phase-4
@@ -92,6 +95,7 @@ class VaultExporter:
         people = self._write_people_mocs(entries, people_map)
         self._write_type_moc("idea", "Resources/Ideias.md", entries)
         self._write_type_moc("note", "Resources/Notas.md", entries)
+        self._write_type_moc("happening", "Resources/Acontecimentos.md", entries)
         self._write_archive_moc(entries)
         days = self._write_journal(entries)
         reviews = self._write_reviews()
@@ -126,6 +130,7 @@ class VaultExporter:
             "event": "[[Areas/Agenda|Agenda]]",
             "idea": "[[Resources/Ideias|Ideias]]",
             "note": "[[Resources/Notas|Notas]]",
+            "happening": "[[Resources/Acontecimentos|Acontecimentos]]",
         }
         return homes[type_key]
 
@@ -363,6 +368,7 @@ class VaultExporter:
             "", "## 📚 Resources",
             "- [[Resources/Ideias|Ideias]]",
             "- [[Resources/Notas|Notas]]",
+            "- [[Resources/Acontecimentos|Acontecimentos]]",
             "- [[Resources/Reviews|Reviews]]",
             "", "## 🗄 Archive",
             "- [[Archive/Concluidas|Concluídas]]",

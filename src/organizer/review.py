@@ -71,7 +71,7 @@ def _describe_entry(repo: EntryRepository, entry: Entry) -> str:
 
 def _type_counts(entries: list[Entry]) -> str:
     counts = Counter(e.type or "note" for e in entries)
-    order = ["task", "event", "idea", "note"]
+    order = ["task", "event", "happening", "idea", "note"]
     return ", ".join(f"{t}: {counts.get(t, 0)}" for t in order)
 
 

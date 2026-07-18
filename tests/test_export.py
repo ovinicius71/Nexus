@@ -171,6 +171,26 @@ def test_export_links_accepted_connections(session: Session, tmp_path) -> None:
     assert f"[[Slipbox/{b.id}-ideia-b|Ideia B]]" in note
 
 
+def test_export_happening_type(session: Session, tmp_path) -> None:
+    repo = EntryRepository(session)
+    entry = repo.add_raw_entry("passei na prova e fiquei muito feliz")
+    repo.apply_classification(
+        entry, EntryClassification(type=EntryType.happening, title="Passei na prova"), "{}"
+    )
+
+    VaultExporter(session, tmp_path).export()
+
+    # atomic note up-links to the Acontecimentos MOC
+    note = _read(tmp_path, "Slipbox", "1-passei-na-prova.md")
+    assert "**Up:** [[Resources/Acontecimentos|Acontecimentos]]" in note
+    assert 'tags: ["happening", "para/resource"]' in note
+    # Resources MOC lists it; Home links the MOC
+    assert "[[Slipbox/1-passei-na-prova|Passei na prova]]" in _read(
+        tmp_path, "Resources", "Acontecimentos.md"
+    )
+    assert "[[Resources/Acontecimentos|Acontecimentos]]" in _read(tmp_path, "Home.md")
+
+
 def test_export_writes_reviews(session: Session, tmp_path) -> None:
     repo = _seed(session)
     review = repo.add_review(

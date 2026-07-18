@@ -13,6 +13,7 @@ class EntryType(str, Enum):
     task = "task"
     event = "event"
     note = "note"
+    happening = "happening"  # personal, emotional occurrence ("acontecimento")
 
 
 class Priority(str, Enum):
