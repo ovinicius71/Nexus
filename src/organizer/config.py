@@ -30,6 +30,17 @@ class Settings(BaseSettings):
     # When true, /buscar sends candidates to Claude Haiku to filter by meaning
     # (e.g. "sair" also matches "cinema com a Helen"). Needs ANTHROPIC_API_KEY.
     search_rerank: bool = True
+    # Phase 6: weekly review (Claude Sonnet) + proactive scheduling.
+    insights_model: str = "claude-sonnet-5"
+    timezone: str = "America/Campo_Grande"
+    # Automatic weekly review: enabled, on which weekday (0=Mon..6=Sun) and hour.
+    review_auto_enabled: bool = True
+    review_weekday: int = 6  # Sunday
+    review_hour: int = 20
+    # Proactivity fires only once the history is rich enough:
+    # at least this many entries OR this many weeks of use.
+    review_min_entries: int = 200
+    review_min_weeks: int = 4
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(

@@ -171,6 +171,30 @@ def test_export_links_accepted_connections(session: Session, tmp_path) -> None:
     assert f"[[Slipbox/{b.id}-ideia-b|Ideia B]]" in note
 
 
+def test_export_writes_reviews(session: Session, tmp_path) -> None:
+    repo = _seed(session)
+    review = repo.add_review(
+        period_start=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        period_end=datetime(2026, 7, 17, tzinfo=timezone.utc),
+        summary="Semana produtiva",
+        content_json='{"summary": "Semana produtiva", "growing_themes": ["tcc"], '
+        '"postponed_tasks": [], "orphan_ideas": [], "routine_patterns": []}',
+    )
+
+    result = VaultExporter(session, tmp_path).export()
+
+    assert result.reviews == 1
+    note = _read(tmp_path, "Journal", "Reviews", f"2026-07-17-{review.id}.md")
+    assert "# 🧠 Review 2026-07-10 → 2026-07-17" in note
+    assert "## 📈 Temas em crescimento" in note
+    assert "- tcc" in note
+    assert "**Up:** [[Resources/Reviews|Reviews]]" in note
+
+    moc = _read(tmp_path, "Resources", "Reviews.md")
+    assert f"[[Journal/Reviews/2026-07-17-{review.id}|Review 2026-07-17]]" in moc
+    assert "[[Resources/Reviews|Reviews]]" in _read(tmp_path, "Home.md")
+
+
 def test_slugify() -> None:
     assert _slugify("App de Hábitos!") == "app-de-habitos"
     assert _slugify("TCC — capítulo 2") == "tcc-capitulo-2"

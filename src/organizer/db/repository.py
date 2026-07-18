@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta, timezone
 
-from sqlalchemy import case, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..llm.classifier import CorrectionExample
 from ..llm.schema import EntryClassification
-from .models import Connection, Correction, Entry, EntryPerson, Person
+from .models import Connection, Correction, Entry, EntryPerson, Person, Review
 
 
 class EntryRepository:
@@ -142,6 +142,49 @@ class EntryRepository:
             if other not in related_ids:
                 related_ids.append(other)
         return self.get_by_ids(sorted(related_ids))
+
+    # --- Phase 6: insights / weekly review -----------------------------
+
+    def count_entries(self) -> int:
+        """Total number of entries (used by the proactivity trigger)."""
+        return self._session.scalar(select(func.count(Entry.id))) or 0
+
+    def first_entry_at(self) -> datetime | None:
+        """Timestamp of the oldest entry, or ``None`` if the base is empty."""
+        return self._session.scalar(select(func.min(Entry.created_at)))
+
+    def list_since(self, since: datetime) -> list[Entry]:
+        """Entries created at or after ``since`` (naive UTC), oldest first."""
+        stmt = (
+            select(Entry)
+            .where(Entry.created_at >= since)
+            .order_by(Entry.created_at.asc(), Entry.id.asc())
+        )
+        return list(self._session.scalars(stmt))
+
+    def add_review(
+        self,
+        period_start: datetime,
+        period_end: datetime,
+        summary: str,
+        content_json: str,
+    ) -> Review:
+        """Persist a generated weekly review."""
+        review = Review(
+            period_start=period_start,
+            period_end=period_end,
+            summary=summary,
+            content_json=content_json,
+        )
+        self._session.add(review)
+        self._session.commit()
+        self._session.refresh(review)
+        return review
+
+    def list_reviews(self, limit: int = 50) -> list[Review]:
+        """Stored reviews, newest first."""
+        stmt = select(Review).order_by(Review.created_at.desc(), Review.id.desc()).limit(limit)
+        return list(self._session.scalars(stmt))
 
     # --- Phase 2: classification ---------------------------------------
 

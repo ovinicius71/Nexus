@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, time as dtime, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session, sessionmaker
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -23,6 +25,7 @@ BOT_COMMANDS = [
     BotCommand("ideias", "Suas ideias"),
     BotCommand("eventos", "Seus eventos"),
     BotCommand("buscar", "Buscar por termo"),
+    BotCommand("review", "Análise da semana (IA)"),
     BotCommand("export", "Exportar para o Obsidian"),
 ]
 
@@ -32,7 +35,9 @@ from ..db.repository import EntryRepository
 from ..embeddings import Embedder
 from ..export import VaultExporter
 from ..llm.classifier import Classifier
+from ..llm.insights import ReviewAnalyzer
 from ..llm.search import Candidate, SearchRanker
+from ..review import render_review, run_review, trigger_met, weeks_of_use
 from ..semantic import SemanticIndex
 
 logger = logging.getLogger(__name__)
@@ -159,6 +164,21 @@ def _embedder(context: ContextTypes.DEFAULT_TYPE) -> Embedder | None:
 
 def _search_ranker(context: ContextTypes.DEFAULT_TYPE) -> SearchRanker | None:
     return context.application.bot_data.get("search_ranker")
+
+
+def _review_analyzer(context: ContextTypes.DEFAULT_TYPE) -> ReviewAnalyzer | None:
+    return context.application.bot_data.get("review_analyzer")
+
+
+def _now_utc_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _generate_review(session_factory: sessionmaker[Session], analyzer: ReviewAnalyzer):
+    """Blocking: build the snapshot, call Sonnet, store the review (run in a thread)."""
+    with session_factory() as session:
+        review, result = run_review(session, analyzer)
+        return result, review.period_start, review.period_end
 
 
 def _semantic_index(context: ContextTypes.DEFAULT_TYPE, session: Session) -> SemanticIndex:
@@ -483,7 +503,71 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         result = await asyncio.to_thread(VaultExporter(session, vault_path).export)
     await update.message.reply_text(
         f"📤 Export concluído: {result.entries} entrada(s), {result.days} dia(s), "
-        f"{result.projects} projeto(s) e {result.people} pessoa(s) em `{result.vault}`."
+        f"{result.projects} projeto(s), {result.people} pessoa(s) e "
+        f"{result.reviews} review(s) em `{result.vault}`."
+    )
+
+
+# --- weekly review (Phase 6) -----------------------------------------------
+
+
+async def cmd_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and send the weekly review on demand (Claude Sonnet)."""
+    analyzer = _review_analyzer(context)
+    if analyzer is None:
+        await update.message.reply_text(
+            "🧠 Review indisponível — defina ANTHROPIC_API_KEY."
+        )
+        return
+    await update.message.reply_text("🧠 Analisando sua semana… (pode levar alguns segundos)")
+    try:
+        result, period_start, period_end = await asyncio.to_thread(
+            _generate_review, _session_factory(context), analyzer
+        )
+    except Exception:
+        logger.exception("Weekly review failed")
+        await update.message.reply_text(
+            "⚠️ Não consegui gerar o review agora (erro na IA). Tente mais tarde."
+        )
+        return
+    await update.message.reply_text(render_review(result, period_start, period_end))
+
+
+async def weekly_review_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Scheduled daily; acts only on the configured weekday once the trigger is met."""
+    bot_data = context.application.bot_data
+    analyzer = bot_data.get("review_analyzer")
+    if analyzer is None:
+        return
+    tz = ZoneInfo(bot_data["timezone"])
+    if datetime.now(tz).weekday() != bot_data["review_weekday"]:
+        return
+
+    session_factory = bot_data["session_factory"]
+    with session_factory() as session:
+        repo = EntryRepository(session)
+        total = repo.count_entries()
+        first_at = repo.first_entry_at()
+    weeks = weeks_of_use(first_at, _now_utc_naive())
+    if not trigger_met(
+        total, weeks, bot_data["review_min_entries"], bot_data["review_min_weeks"]
+    ):
+        logger.info(
+            "Weekly review skipped: trigger not met (entries=%s, weeks=%s)", total, weeks
+        )
+        return
+
+    try:
+        result, period_start, period_end = await asyncio.to_thread(
+            _generate_review, session_factory, analyzer
+        )
+    except Exception:
+        logger.exception("Automatic weekly review failed")
+        return
+    await context.bot.send_message(
+        bot_data["allowed_chat_id"],
+        "🗓 Seu review semanal automático:\n\n"
+        + render_review(result, period_start, period_end),
     )
 
 
@@ -535,6 +619,7 @@ def build_application(
     classifier: Classifier | None = None,
     embedder: Embedder | None = None,
     search_ranker: SearchRanker | None = None,
+    review_analyzer: ReviewAnalyzer | None = None,
 ) -> Application:
     """Wire up the Telegram application with handlers restricted to the owner chat."""
     application = (
@@ -549,6 +634,11 @@ def build_application(
     application.bot_data["similarity_threshold"] = settings.similarity_threshold
     application.bot_data["search_threshold"] = settings.search_threshold
     application.bot_data["search_ranker"] = search_ranker
+    application.bot_data["review_analyzer"] = review_analyzer
+    application.bot_data["timezone"] = settings.timezone
+    application.bot_data["review_weekday"] = settings.review_weekday
+    application.bot_data["review_min_entries"] = settings.review_min_entries
+    application.bot_data["review_min_weeks"] = settings.review_min_weeks
 
     owner_only = filters.Chat(chat_id=settings.allowed_chat_id)
 
@@ -558,6 +648,7 @@ def build_application(
     application.add_handler(CommandHandler("ideias", cmd_ideias, filters=owner_only))
     application.add_handler(CommandHandler("eventos", cmd_eventos, filters=owner_only))
     application.add_handler(CommandHandler("buscar", cmd_buscar, filters=owner_only))
+    application.add_handler(CommandHandler("review", cmd_review, filters=owner_only))
     application.add_handler(CommandHandler("export", cmd_export, filters=owner_only))
     application.add_handler(
         MessageHandler(owner_only & filters.TEXT & ~filters.COMMAND, handle_text)
@@ -577,4 +668,30 @@ def build_application(
     application.add_handler(MessageHandler(filters.ALL, log_incoming), group=1)
     application.add_error_handler(on_error)
 
+    _schedule_weekly_review(application, settings)
     return application
+
+
+def _schedule_weekly_review(application: Application, settings: Settings) -> None:
+    """Schedule the proactive weekly review (JobQueue = APScheduler under the hood).
+
+    Runs daily at the configured hour; ``weekly_review_job`` itself gates on the
+    weekday and the proactivity trigger, so the weekday choice stays robust
+    regardless of the JobQueue's day-indexing.
+    """
+    if not settings.review_auto_enabled or application.bot_data.get("review_analyzer") is None:
+        return
+    if application.job_queue is None:  # pragma: no cover - needs [job-queue] extra
+        logger.warning("JobQueue unavailable; automatic weekly review disabled.")
+        return
+    try:
+        tz = ZoneInfo(settings.timezone)
+    except Exception:  # pragma: no cover - bad tz name in .env
+        logger.warning("Invalid TIMEZONE %r; falling back to UTC.", settings.timezone)
+        tz = timezone.utc
+    run_at = dtime(hour=settings.review_hour, minute=0, tzinfo=tz)
+    application.job_queue.run_daily(weekly_review_job, time=run_at, name="weekly_review")
+    logger.info(
+        "Weekly review scheduled: weekday=%s at %02d:00 %s",
+        settings.review_weekday, settings.review_hour, settings.timezone,
+    )

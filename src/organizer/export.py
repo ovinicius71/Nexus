@@ -59,6 +59,16 @@ class ExportResult:
     projects: int
     people: int
     vault: Path
+    reviews: int = 0
+
+
+# Weekly-review sections: json field -> heading (shared with the bot rendering).
+REVIEW_SECTIONS = [
+    ("postponed_tasks", "⏳ Tarefas adiadas"),
+    ("growing_themes", "📈 Temas em crescimento"),
+    ("orphan_ideas", "💡 Ideias órfãs"),
+    ("routine_patterns", "🔁 Padrões de rotina"),
+]
 
 
 class VaultExporter:
@@ -84,15 +94,17 @@ class VaultExporter:
         self._write_type_moc("note", "Resources/Notas.md", entries)
         self._write_archive_moc(entries)
         days = self._write_journal(entries)
+        reviews = self._write_reviews()
         self._write_home(projects, people)
 
         result = ExportResult(
             entries=len(entries), days=days, projects=len(projects),
-            people=len(people), vault=self._vault,
+            people=len(people), vault=self._vault, reviews=reviews,
         )
         logger.info(
-            "Exported %s entries, %s days, %s projects, %s people to %s",
-            result.entries, result.days, result.projects, result.people, self._vault,
+            "Exported %s entries, %s days, %s projects, %s people, %s reviews to %s",
+            result.entries, result.days, result.projects, result.people,
+            result.reviews, self._vault,
         )
         return result
 
@@ -278,6 +290,60 @@ class VaultExporter:
                    "\n".join(lines).rstrip() + "\n")
         return len(by_day)
 
+    # --- Reviews (Phase 6) --------------------------------------------
+
+    def _review_basename(self, review) -> str:
+        return f"{_plain_date(review.period_end).isoformat()}-{review.id}"
+
+    def _review_link(self, review) -> str:
+        label = f"Review {_plain_date(review.period_end).isoformat()}"
+        return f"[[Journal/Reviews/{self._review_basename(review)}|{label}]]"
+
+    def _write_reviews(self) -> int:
+        reviews = self._repo.list_reviews()
+        for review in reviews:
+            data = json.loads(review.content_json)
+            ps = _plain_date(review.period_start).isoformat()
+            pe = _plain_date(review.period_end).isoformat()
+            front = _frontmatter(
+                {
+                    "type": "review",
+                    "period_start": ps,
+                    "period_end": pe,
+                    "created": _local_dt(review.created_at).isoformat(),
+                    "tags": ["review", "para/resource"],
+                }
+            )
+            body = [front, "", f"# 🧠 Review {ps} → {pe}", ""]
+            summary = data.get("summary") or review.summary
+            if summary:
+                body += [summary, ""]
+            for field, heading in REVIEW_SECTIONS:
+                items = data.get(field) or []
+                if not items:
+                    continue
+                body.append(f"## {heading}")
+                body += [f"- {item}" for item in items]
+                body.append("")
+            body.append("**Up:** [[Resources/Reviews|Reviews]]")
+            _write(
+                self._vault / "Journal" / "Reviews" / f"{self._review_basename(review)}.md",
+                "\n".join(body).rstrip() + "\n",
+            )
+        self._write_reviews_moc(reviews)
+        return len(reviews)
+
+    def _write_reviews_moc(self, reviews: list) -> None:
+        lines = [
+            _frontmatter({"type": "moc", "tags": ["moc", "para/resource"]}),
+            "", "# 🧠 Reviews", "",
+        ]
+        if reviews:
+            lines += [f"- {self._review_link(r)} — {r.summary}" for r in reviews]
+        else:
+            lines.append("_(nenhum review ainda)_")
+        _write(self._vault / "Resources" / "Reviews.md", "\n".join(lines) + "\n")
+
     # --- Home (root MOC) ----------------------------------------------
 
     def _write_home(self, projects: list[str], people: list[str]) -> None:
@@ -297,6 +363,7 @@ class VaultExporter:
             "", "## 📚 Resources",
             "- [[Resources/Ideias|Ideias]]",
             "- [[Resources/Notas|Notas]]",
+            "- [[Resources/Reviews|Reviews]]",
             "", "## 🗄 Archive",
             "- [[Archive/Concluidas|Concluídas]]",
         ]
@@ -388,6 +455,15 @@ def _local_date(dt: datetime) -> date:
     return _local_dt(dt).date()
 
 
+def _plain_date(dt: datetime) -> date:
+    """Calendar date as stored (UTC), without shifting into the local timezone.
+
+    Used for review period boundaries, which are logical day markers, not
+    wall-clock moments to localize.
+    """
+    return (dt.replace(tzinfo=None) if dt.tzinfo is not None else dt).date()
+
+
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -407,8 +483,8 @@ def main() -> None:
         result = VaultExporter(session, settings.vault_path).export()
     print(
         f"Export: {result.entries} entrada(s), {result.days} dia(s), "
-        f"{result.projects} projeto(s), {result.people} pessoa(s) "
-        f"-> {result.vault.resolve()}"
+        f"{result.projects} projeto(s), {result.people} pessoa(s), "
+        f"{result.reviews} review(s) -> {result.vault.resolve()}"
     )
 
 

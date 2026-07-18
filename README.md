@@ -5,9 +5,9 @@ Você manda tarefas, ideias, eventos e anotações pelo Telegram; o bot classifi
 armazena tudo — e, conforme os dados se acumulam, passa a encontrar conexões e dar dicas sobre
 sua rotina.
 
-> **Status:** Fase 5 (Memória semântica) — além de capturar, classificar, consultar e exportar,
-> o bot gera **embeddings locais** de cada entrada (offline, sem custo), sugere **conexões** entre
-> notas parecidas ("isso se conecta com…") e a `/buscar` passou a ser **semântica**.
+> **Status:** Fase 6 (Insights e proatividade) — projeto completo. Além de capturar, classificar,
+> consultar, exportar e conectar notas, o bot gera um **review semanal** com Claude Sonnet
+> (`/review`) e, quando o histórico fica rico o suficiente, **manda o review sozinho** no Telegram.
 
 ## Visão geral da arquitetura
 
@@ -15,8 +15,9 @@ sua rotina.
 - **Persistência:** SQLite via SQLAlchemy, atrás de uma **camada de repositório**
   (facilita uma migração futura para Postgres)
 - **Configuração:** `.env` + `pydantic-settings`
-- **IA:** API da Anthropic — Claude Haiku (`claude-haiku-4-5`) para classificação via structured
-  output; Claude Sonnet para insights (fase futura)
+- **IA:** API da Anthropic — Claude Haiku (`claude-haiku-4-5`) para classificação e para o filtro
+  da busca (structured output); Claude Sonnet (`claude-sonnet-5`) para o review semanal / insights
+- **Agendamento:** `JobQueue` do `python-telegram-bot` (APScheduler por baixo) para o review automático
 - **Memória semântica:** embeddings locais via `sentence-transformers` (offline, sem custo) +
   `sqlite-vec` para busca por similaridade no próprio SQLite
 
@@ -35,10 +36,13 @@ src/organizer/
 │   └── classifier.py  # chamada ao Claude Haiku + few-shot das correções
 ├── embeddings.py      # Embedder local (sentence-transformers, offline)
 ├── semantic.py        # SemanticIndex sobre sqlite-vec (busca por similaridade)
-├── bot/app.py         # handlers do Telegram: texto, card + correção, consultas, conexões, export
+├── review.py          # monta o snapshot da semana, orquestra e renderiza o review
+├── bot/app.py         # handlers do Telegram: texto, card, consultas, conexões, review, export
 ├── export.py          # export para o vault do Obsidian (idempotente)
 └── main.py            # entrypoint
 prompts/classify.md    # prompt de classificação (versionável)
+prompts/search.md      # prompt do filtro de busca (Haiku)
+prompts/review.md      # prompt do review semanal (Sonnet)
 evals/                 # mini-eval de acurácia por campo
 tests/                 # testes de repositório e do classificador (LLM mockado)
 ```
@@ -72,6 +76,8 @@ Edite o `.env`:
   `chat_id` no log do terminal ao enviar uma mensagem.
 - `DATABASE_URL` — opcional; padrão `sqlite:///organizer.db`.
 - `LOG_LEVEL` — opcional; padrão `INFO`.
+- Opções avançadas (busca semântica, limiares e review semanal) têm padrões sensatos e estão
+  todas documentadas no `.env.example` — só mexa se quiser ajustar (ex.: `TIMEZONE`, `REVIEW_HOUR`).
 
 ## Como rodar
 
@@ -107,6 +113,7 @@ O script reporta a acurácia por campo (tipo, prazo, prioridade, projeto, pessoa
   para sair"* (conceito de sair), enquanto `joão` continua só com as notas do João. Com
   `SEARCH_RERANK=false`, cai numa **busca híbrida local** (sem custo de API): **Resultados** exatos
   primeiro, depois **Relacionados** por similaridade acima de `SEARCH_THRESHOLD` (padrão `0.45`).
+- `/review` — gera a **análise da semana** com Claude Sonnet (ver seção abaixo).
 
 ### Memória semântica e conexões (Fase 5)
 
@@ -119,6 +126,25 @@ Obsidian.
 
 - Primeiro uso baixa o modelo (`EMBEDDING_MODEL`, ~120 MB) uma vez.
 - Entradas antigas são indexadas automaticamente ao iniciar o bot.
+
+### Review semanal e proatividade (Fase 6)
+
+`/review` monta um **snapshot** do seu banco — as entradas da última semana (cruas) + agregados de
+todo o histórico (contagens por tipo/projeto, idade das tarefas abertas, ideias órfãs) — e manda
+pro **Claude Sonnet**, que devolve uma análise estruturada em seções:
+
+- ⏳ **tarefas adiadas** (vencidas ou abertas há tempo)
+- 📈 **temas em crescimento** (projetos/pessoas/assuntos mais ativos que a média)
+- 💡 **ideias órfãs** (ideias sem projeto e sem conexão aceita)
+- 🔁 **padrões de rotina** (dias mais cheios, equilíbrio tarefas × ideias)
+
+Regra mantida de ponta a ponta: o modelo **não inventa** dados — cada ponto é ancorado no snapshot.
+
+**Proatividade:** um job semanal (`JobQueue`) roda no dia/hora configurados (padrão **domingo 20h**,
+fuso `TIMEZONE`) e, **só quando o histórico é rico o bastante** (`REVIEW_MIN_ENTRIES` entradas **ou**
+`REVIEW_MIN_WEEKS` semanas de uso — padrão 200 ou 4), gera o review e **envia sozinho** no Telegram.
+Abaixo desse limiar, ele não incomoda. Desligue com `REVIEW_AUTO_ENABLED=false` (o `/review` manual
+continua funcionando). Cada review é salvo no banco (tabela `reviews`) e vai para o export do Obsidian.
 
 ### Export para o Obsidian (Fase 4)
 
@@ -143,7 +169,9 @@ Areas/People/<nome>.md        #   MOC por pessoa (relação contínua)
 Resources/Ideias.md           # PARA "Resources": índice de ideias (conhecimento)
 Resources/Notas.md            #   índice de notas de referência
 Archive/Concluidas.md         # PARA "Archive": tarefas concluídas
+Resources/Reviews.md          #   índice dos reviews semanais (Fase 6)
 Journal/YYYY-MM-DD.md         # log cronológico do dia
+Journal/Reviews/<data>-<id>.md#   cada review semanal como nota (Fase 6)
 Slipbox/<id>-<slug>.md        # Zettelkasten: 1 nota atômica plana por entrada
 ```
 
@@ -187,4 +215,5 @@ sqlite3 organizer.db "select id, raw_text, created_at from entries;"
   (`/export` + script, notas atômicas + MOCs, frontmatter YAML + wikilinks).
 - **Fase 5:** ✅ memória semântica (embeddings locais + sqlite-vec), sugestão de conexões e
   `/buscar` por significado (recall semântico + rerank opcional com Claude Haiku; fallback híbrido local).
-- **Fase 6:** insights e proatividade (`/review` semanal com Claude Sonnet).
+- **Fase 6:** ✅ insights e proatividade — `/review` semanal com Claude Sonnet, review automático
+  agendado (JobQueue, gatilho de 200+ entradas ou 4+ semanas) e reviews salvos no banco e no Obsidian.
