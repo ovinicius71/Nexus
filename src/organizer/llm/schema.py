@@ -22,6 +22,15 @@ class Priority(str, Enum):
     low = "low"
 
 
+class Activity(BaseModel):
+    """A measurable/repeatable activity mentioned in a note ("corri 5km")."""
+
+    name: str  # normalized activity name, e.g. "corrida", "academia", "leitura"
+    value: float | None = None  # numeric amount if stated, else null
+    unit: str | None = None  # e.g. "km", "h", "paginas"; null if not stated
+    occurred_on: date | None = None  # when it happened (ISO), if stated; else null → entry's date
+
+
 class EntryClassification(BaseModel):
     """Structured result of classifying one raw note.
 
@@ -35,3 +44,4 @@ class EntryClassification(BaseModel):
     priority: Priority | None = None
     project: str | None = None
     people: list[str] = Field(default_factory=list)
+    activities: list[Activity] = Field(default_factory=list)

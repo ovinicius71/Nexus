@@ -9,7 +9,16 @@ from sqlalchemy.orm import Session
 
 from ..llm.classifier import CorrectionExample
 from ..llm.schema import EntryClassification
-from .models import AppSetting, Connection, Correction, Entry, EntryPerson, Person, Review
+from .models import (
+    Activity,
+    AppSetting,
+    Connection,
+    Correction,
+    Entry,
+    EntryPerson,
+    Person,
+    Review,
+)
 
 
 class EntryRepository:
@@ -244,6 +253,41 @@ class EntryRepository:
         stmt = select(Review).order_by(Review.created_at.desc(), Review.id.desc()).limit(limit)
         return list(self._session.scalars(stmt))
 
+    # --- Phase A: activities / light habit tracking --------------------
+
+    def list_recent_activities(self, limit: int = 50) -> list[Activity]:
+        """Logged activities, most recent first."""
+        stmt = (
+            select(Activity)
+            .order_by(Activity.occurred_at.desc(), Activity.id.desc())
+            .limit(limit)
+        )
+        return list(self._session.scalars(stmt))
+
+    def activity_summary(
+        self, since: datetime
+    ) -> list[tuple[str, int, float | None, str | None]]:
+        """Aggregate activities since ``since`` as ``(name, count, total, unit)``.
+
+        Ordered by frequency (most done first). ``total`` sums the numeric values
+        (``None`` when no value was recorded); ``unit`` is a representative unit.
+        """
+        stmt = (
+            select(
+                Activity.name,
+                func.count(Activity.id),
+                func.sum(Activity.value),
+                func.max(Activity.unit),
+            )
+            .where(Activity.occurred_at >= since)
+            .group_by(Activity.name)
+            .order_by(func.count(Activity.id).desc(), Activity.name.asc())
+        )
+        return [
+            (name, int(count), total, unit)
+            for name, count, total, unit in self._session.execute(stmt)
+        ]
+
     # --- Phase 2: classification ---------------------------------------
 
     def apply_classification(
@@ -259,6 +303,7 @@ class EntryRepository:
         entry.llm_json = llm_json
 
         self._set_people(entry, classification.people)
+        self._set_activities(entry, classification.activities)
         self._session.commit()
         self._session.refresh(entry)
         return entry
@@ -346,6 +391,27 @@ class EntryRepository:
             seen.add(key)
             person = self._get_or_create_person(name)
             entry.people.append(EntryPerson(person=person))
+
+    def _set_activities(self, entry: Entry, activities: list) -> None:
+        """Replace an entry's logged activities with the classified ones.
+
+        ``occurred_at`` uses the activity's own date when the note stated one
+        (e.g. "ontem corri"); otherwise it falls back to the entry's timestamp.
+        """
+        entry.activities.clear()
+        for a in activities:
+            name = (a.name or "").strip().lower()
+            if not name:
+                continue
+            unit = a.unit.strip().lower() if a.unit else None
+            occurred_at = (
+                datetime.combine(a.occurred_on, time.min)
+                if getattr(a, "occurred_on", None) is not None
+                else entry.created_at
+            )
+            entry.activities.append(
+                Activity(name=name, value=a.value, unit=unit, occurred_at=occurred_at)
+            )
 
     def _get_or_create_person(self, name: str) -> Person:
         person = self._session.scalar(select(Person).where(Person.name == name))

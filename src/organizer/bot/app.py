@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, time as dtime, timezone
+from datetime import datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -26,6 +26,7 @@ BOT_COMMANDS = [
     BotCommand("ideias", "Suas ideias"),
     BotCommand("eventos", "Seus eventos"),
     BotCommand("acontecimentos", "Seus acontecimentos"),
+    BotCommand("habitos", "Seus hábitos/atividades"),
     BotCommand("buscar", "Buscar por termo"),
     BotCommand("perguntar", "Perguntar às suas notas (IA)"),
     BotCommand("editar", "Editar uma entrada por texto"),
@@ -70,6 +71,13 @@ PRIORITY_LABELS = {"high": "🔴 Alta", "medium": "🟡 Média", "low": "🟢 Ba
 # --- rendering -------------------------------------------------------------
 
 
+def _format_activity(activity) -> str:
+    if activity.value is not None:
+        amount = f"{activity.value:g}{(' ' + activity.unit) if activity.unit else ''}"
+        return f"{activity.name} {amount}".strip()
+    return activity.name
+
+
 def render_card(entry: Entry, people: list[str], suffix: str = "") -> str:
     """Build the human-readable classification summary for an entry."""
     type_label = TYPE_LABELS.get(entry.type or "", entry.type or "—")
@@ -84,6 +92,9 @@ def render_card(entry: Entry, people: list[str], suffix: str = "") -> str:
         f"• Projeto: {entry.project or '—'}",
         f"• Pessoas: {', '.join(people) if people else '—'}",
     ]
+    if entry.activities:
+        activities = " · ".join(_format_activity(a) for a in entry.activities)
+        lines.append(f"• Atividades: {activities}")
     if suffix:
         lines.append("")
         lines.append(suffix)
@@ -459,6 +470,26 @@ async def cmd_acontecimentos(update: Update, context: ContextTypes.DEFAULT_TYPE)
     with _session_factory(context)() as session:
         entries = EntryRepository(session).list_by_type("happening")
     await update.message.reply_text(render_list("📔 Acontecimentos:", entries))
+
+
+async def cmd_habitos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Summary of tracked activities in the last 7 days."""
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
+    with _session_factory(context)() as session:
+        rows = EntryRepository(session).activity_summary(since)
+    if not rows:
+        await update.message.reply_text(
+            "🏃 Nenhuma atividade registrada nos últimos 7 dias.\n"
+            'Mande algo como "corri 5km" ou "estudei 2h" que eu começo a rastrear.'
+        )
+        return
+    lines = ["📊 Hábitos — últimos 7 dias:"]
+    for name, count, total, unit in rows:
+        line = f"• {name} — {count}×"
+        if total:
+            line += f" · {total:g} {unit or ''}".rstrip()
+        lines.append(line)
+    await update.message.reply_text("\n".join(lines))
 
 
 # For the Haiku-reranked search we cast a wide net (low similarity floor) and let
@@ -941,6 +972,7 @@ def build_application(
     application.add_handler(
         CommandHandler("acontecimentos", cmd_acontecimentos, filters=owner_only)
     )
+    application.add_handler(CommandHandler("habitos", cmd_habitos, filters=owner_only))
     application.add_handler(CommandHandler("buscar", cmd_buscar, filters=owner_only))
     application.add_handler(CommandHandler("perguntar", cmd_perguntar, filters=owner_only))
     application.add_handler(CommandHandler("editar", cmd_editar, filters=owner_only))

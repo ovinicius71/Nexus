@@ -171,6 +171,7 @@ class VaultExporter:
                 "priority": entry.priority,
                 "project": entry.project,
                 "people": people,
+                "activities": [_activity_str(a) for a in entry.activities],
                 "tags": tags,
             }
         )
@@ -399,6 +400,14 @@ class VaultExporter:
 
 def _type_of(entry: Entry) -> str:
     return entry.type if entry.type in TYPE_ICON else "note"
+
+
+def _activity_str(activity) -> str:
+    """Compact 'name value unit' string for frontmatter (Dataview-friendly)."""
+    if activity.value is not None:
+        amount = f"{activity.value:g}{(' ' + activity.unit) if activity.unit else ''}"
+        return f"{activity.name} {amount}".strip()
+    return activity.name
 
 
 def _title(entry: Entry) -> str:

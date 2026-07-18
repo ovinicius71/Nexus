@@ -48,6 +48,8 @@ flowchart TD
   acontecimento · ideia · nota**, com **aprendizado incremental**: cada correção sua vira *few-shot*
   nas próximas classificações. (📔 *Acontecimento* = um registro pessoal/emocional — algo que te
   aconteceu e mexeu com você.)
+- 🏃 **Rastreamento leve de hábitos** — mensagens como *"corri 5km"* viram registros estruturados
+  (atividade, valor, unidade, data) e aparecem no `/habitos`. Base para cruzar com os insights depois.
 - 🧭 **Memória semântica local** — embeddings offline (`sentence-transformers`) + `sqlite-vec` no
   próprio banco, **sem custo de API**. Ao salvar uma nota, o bot sugere conexões com as parecidas.
 - 💬 **RAG conversacional** (`/perguntar`) — pergunte em linguagem natural e receba respostas
@@ -74,6 +76,7 @@ no menu do Telegram:
 | `/dia` | O que é **para hoje**: tarefas com prazo hoje + atrasadas (⚠️) e eventos do dia |
 | `/hoje` | Entradas **criadas** hoje |
 | `/ideias` · `/eventos` · `/acontecimentos` | Lista as entradas por tipo (💡 ideias, 📅 eventos, 📔 acontecimentos pessoais) |
+| `/habitos` | **Rastreamento leve de hábitos**: resumo das atividades dos últimos 7 dias (ex.: 🏃 corrida — 3× · 15 km) |
 | `/buscar <termo>` | **Busca por significado**: match exato + vizinhos semânticos filtrados pelo Haiku |
 | `/perguntar <pergunta>` | **RAG**: responde ancorado nas suas notas (Sonnet), citando `#id`/data |
 | `/editar <instrução>` | **Edição natural**: descobre a entrada pelo texto (ou use `/editar #<id> …`) |
@@ -185,6 +188,7 @@ edição, RAG e calibração.
 
 ### 🔭 Próximos passos (ideias)
 
+📈 **padrões de hábitos** no review (ex.: *"semanas com 3+ corridas → +40% ideias"*) ·
 🎙️ entrada por **áudio/foto** (Whisper / visão) · 🏗️ **CI** (GitHub Actions + `ruff`) ·
 📊 **gráficos** no review · 🐘 migração para **Postgres + Alembic** · 💬 **memória de conversa** no `/perguntar`.
 

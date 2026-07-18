@@ -55,10 +55,37 @@ class Entry(Base):
     people: Mapped[list["EntryPerson"]] = relationship(
         back_populates="entry", cascade="all, delete-orphan"
     )
+    activities: Mapped[list["Activity"]] = relationship(
+        back_populates="entry", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         preview = (self.raw_text or "")[:30]
         return f"<Entry id={self.id} type={self.type!r} raw_text={preview!r}>"
+
+
+class Activity(Base):
+    """A measurable/repeatable activity logged in an entry (light habit tracking).
+
+    Example: "corri 5km" -> name="corrida", value=5.0, unit="km". ``value`` and
+    ``unit`` are nullable (e.g. "fui à academia" -> name only). ``occurred_at``
+    defaults to the entry's timestamp and is used for weekly aggregation.
+    """
+
+    __tablename__ = "activities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entry_id: Mapped[int] = mapped_column(
+        ForeignKey("entries.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(80), nullable=False)  # normalized, e.g. "corrida"
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(24), nullable=True)  # e.g. "km", "h", "paginas"
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+    entry: Mapped[Entry] = relationship(back_populates="activities")
 
 
 class Person(Base):

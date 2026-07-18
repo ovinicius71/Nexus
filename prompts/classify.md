@@ -25,6 +25,21 @@ Return ONLY the structured object requested. Do not add commentary.
 - `priority`: `high`, `medium`, `low`, or null.
 - `project`: a normalized lowercase slug (e.g. `tcc`, `casa`, `estagio`) or null.
 - `people`: array of person names explicitly mentioned; empty array if none.
+- `activities`: array of measurable/repeatable personal activities the note
+  reports having done (light habit tracking). Empty array if none.
+  - Each item: `name` (a normalized lowercase noun for the activity, e.g.
+    `corrida`, `academia`, `leitura`, `estudo`, `sono`), `value` (the numeric
+    amount if stated, else null), `unit` (e.g. `km`, `h`, `min`, `paginas`;
+    null if not stated) and `occurred_on` (the day it happened as `YYYY-MM-DD`
+    if the note says when — "ontem", "sexta", "dia 12" — resolved against CURRENT
+    DATE; null if not stated, meaning it happened today).
+  - Examples: "corri 5km" -> `{name: "corrida", value: 5, unit: "km", occurred_on: null}`;
+    "ontem estudei 2 horas de cálculo" -> `{name: "estudo", value: 2, unit: "h",
+    occurred_on: <yesterday>}`; "fui à academia" -> `{name: "academia", value: null,
+    unit: null, occurred_on: null}`.
+  - Only include an activity the user actually did/reported. Do NOT extract from
+    plans or intentions ("preciso correr amanhã" is a task, not an activity).
+    NEVER invent a value or unit that is not in the text.
 
 ## Critical rules (no hallucination)
 
