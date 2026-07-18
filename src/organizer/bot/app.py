@@ -21,6 +21,7 @@ from telegram.ext import (
 
 BOT_COMMANDS = [
     BotCommand("tarefas", "Tarefas abertas"),
+    BotCommand("dia", "Tarefas e eventos de hoje"),
     BotCommand("hoje", "Entradas de hoje"),
     BotCommand("ideias", "Suas ideias"),
     BotCommand("eventos", "Seus eventos"),
@@ -376,6 +377,31 @@ async def cmd_tarefas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
 
 
+async def cmd_dia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Today's agenda: tasks due today (or overdue) + events happening today."""
+    today = datetime.now().astimezone().date()
+    with _session_factory(context)() as session:
+        repo = EntryRepository(session)
+        tasks = repo.list_due_today_or_overdue(today)
+        events = repo.list_events_on_day(today)
+
+    if not tasks and not events:
+        await update.message.reply_text("🗓 Nada marcado para hoje. Dia livre! 🎉")
+        return
+
+    if tasks:
+        await update.message.reply_text(f"✅ Tarefas do dia ({len(tasks)}):")
+        for task in tasks:
+            overdue = task.due_date is not None and task.due_date.date() < today
+            line = format_entry_line(task) + ("  ⚠️ atrasada" if overdue else "")
+            await update.message.reply_text(line, reply_markup=done_keyboard(task.id))
+    else:
+        await update.message.reply_text("✅ Nenhuma tarefa para hoje. 🎉")
+
+    if events:
+        await update.message.reply_text(render_list("📅 Eventos de hoje:", events))
+
+
 async def cmd_hoje(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     with _session_factory(context)() as session:
         entries = EntryRepository(session).list_today()
@@ -644,6 +670,7 @@ def build_application(
 
     application.add_handler(CommandHandler("start", start, filters=owner_only))
     application.add_handler(CommandHandler("tarefas", cmd_tarefas, filters=owner_only))
+    application.add_handler(CommandHandler("dia", cmd_dia, filters=owner_only))
     application.add_handler(CommandHandler("hoje", cmd_hoje, filters=owner_only))
     application.add_handler(CommandHandler("ideias", cmd_ideias, filters=owner_only))
     application.add_handler(CommandHandler("eventos", cmd_eventos, filters=owner_only))

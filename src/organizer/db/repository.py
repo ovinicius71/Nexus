@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
@@ -59,6 +59,43 @@ class EntryRepository:
             select(Entry)
             .where(Entry.created_at >= start, Entry.created_at < end)
             .order_by(Entry.created_at.asc())
+            .limit(limit)
+        )
+        return list(self._session.scalars(stmt))
+
+    def list_due_today_or_overdue(self, today: date, limit: int = 100) -> list[Entry]:
+        """Open tasks due today or already overdue, soonest first (the day's to-do).
+
+        Due dates are stored at midnight of their calendar date, so a task is
+        "for today" if its due date is before tomorrow.
+        """
+        end = datetime.combine(today + timedelta(days=1), time.min)
+        stmt = (
+            select(Entry)
+            .where(
+                Entry.type == "task",
+                Entry.status == "open",
+                Entry.due_date.is_not(None),
+                Entry.due_date < end,
+            )
+            .order_by(Entry.due_date.asc(), _priority_rank().asc(), Entry.id.asc())
+            .limit(limit)
+        )
+        return list(self._session.scalars(stmt))
+
+    def list_events_on_day(self, today: date, limit: int = 100) -> list[Entry]:
+        """Events whose date falls on ``today``, earliest first."""
+        start = datetime.combine(today, time.min)
+        end = start + timedelta(days=1)
+        stmt = (
+            select(Entry)
+            .where(
+                Entry.type == "event",
+                Entry.due_date.is_not(None),
+                Entry.due_date >= start,
+                Entry.due_date < end,
+            )
+            .order_by(Entry.due_date.asc(), Entry.id.asc())
             .limit(limit)
         )
         return list(self._session.scalars(stmt))

@@ -105,6 +105,8 @@ O script reporta a acurácia por campo (tipo, prazo, prioridade, projeto, pessoa
 
 - `/tarefas` — tarefas abertas, ordenadas por prazo (mais próximo primeiro) e prioridade; cada
   uma traz um botão **✔️ Concluir**.
+- `/dia` — o que é para hoje: **tarefas com prazo hoje + as atrasadas** (com aviso ⚠️) e os
+  **eventos do dia**. Diferente do `/hoje` (entradas *criadas* hoje) e do `/tarefas` (todas as abertas).
 - `/hoje` — entradas criadas no dia.
 - `/ideias` / `/eventos` — lista por tipo.
 - `/buscar <termo>` — busca por **significado**. Com `SEARCH_RERANK=true` (padrão), o bot junta
@@ -217,3 +219,7 @@ sqlite3 organizer.db "select id, raw_text, created_at from entries;"
   `/buscar` por significado (recall semântico + rerank opcional com Claude Haiku; fallback híbrido local).
 - **Fase 6:** ✅ insights e proatividade — `/review` semanal com Claude Sonnet, review automático
   agendado (JobQueue, gatilho de 200+ entradas ou 4+ semanas) e reviews salvos no banco e no Obsidian.
+- **Fase 7:** ✅ `/dia` — tarefas com prazo hoje/atrasadas + eventos do dia.
+- **Fase 8:** edição em linguagem natural (`/editar`).
+- **Fase 9:** `/perguntar` — RAG conversacional sobre as notas (Sonnet).
+- **Fase 10:** calibração do limiar de similaridade a partir do feedback de conexões.
