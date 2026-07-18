@@ -29,9 +29,11 @@ BOT_COMMANDS = [
     BotCommand("perguntar", "Perguntar às suas notas (IA)"),
     BotCommand("editar", "Editar uma entrada por texto"),
     BotCommand("review", "Análise da semana (IA)"),
+    BotCommand("calibrar", "Calibrar limiar de conexões"),
     BotCommand("export", "Exportar para o Obsidian"),
 ]
 
+from ..calibrate import THRESHOLD_KEY, run_calibration
 from ..config import Settings
 from ..db.models import Entry
 from ..db.repository import EntryRepository
@@ -183,6 +185,17 @@ def _answerer(context: ContextTypes.DEFAULT_TYPE) -> Answerer | None:
     return context.application.bot_data.get("answerer")
 
 
+def _suggestion_threshold(context: ContextTypes.DEFAULT_TYPE, repo: EntryRepository) -> float:
+    """Threshold for connection suggestions: learned (calibrated) value, else .env."""
+    learned = repo.get_setting(THRESHOLD_KEY)
+    if learned is not None:
+        try:
+            return float(learned)
+        except ValueError:  # pragma: no cover - corrupted stored value
+            logger.warning("Ignoring invalid learned threshold %r", learned)
+    return context.application.bot_data["similarity_threshold"]
+
+
 def _now_utc_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -286,7 +299,7 @@ async def _index_and_suggest(context, session, repo, entry) -> tuple[str, int] |
     matches = index.search(vector, k=1, exclude_id=entry.id)
     index.upsert(entry.id, vector)
 
-    threshold = context.application.bot_data["similarity_threshold"]
+    threshold = _suggestion_threshold(context, repo)
     if not matches or matches[0][1] < threshold:
         return None
     other_id, similarity = matches[0]
@@ -818,6 +831,29 @@ async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.edit_message_text(f"{line}\n\n✔️ Concluída.")
 
 
+# --- calibration (Phase 10) ------------------------------------------------
+
+
+def render_calibration(result) -> str:
+    """Human-readable calibration report for Telegram."""
+    if not result.enough:
+        return "📉 " + result.message
+    return (
+        "📈 Limiar de conexões calibrado a partir do seu feedback:\n"
+        f"• Novo limiar: {result.threshold:.3f} (já em uso)\n"
+        f"• F1: {result.f1:.2f} · precisão: {result.precision:.2f} · recall: {result.recall:.2f}\n"
+        f"• Base: {result.n_pos} aceitas / {result.n_neg} rejeitadas"
+    )
+
+
+async def cmd_calibrar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Calibrate the connection-suggestion threshold from stored feedback."""
+    min_samples = context.application.bot_data["calibration_min_samples"]
+    with _session_factory(context)() as session:
+        result = await asyncio.to_thread(run_calibration, session, min_samples)
+    await update.message.reply_text(render_calibration(result))
+
+
 # --- setup helpers / wiring ------------------------------------------------
 
 
@@ -876,6 +912,7 @@ def build_application(
     application.bot_data["review_weekday"] = settings.review_weekday
     application.bot_data["review_min_entries"] = settings.review_min_entries
     application.bot_data["review_min_weeks"] = settings.review_min_weeks
+    application.bot_data["calibration_min_samples"] = settings.calibration_min_samples
 
     owner_only = filters.Chat(chat_id=settings.allowed_chat_id)
 
@@ -889,6 +926,7 @@ def build_application(
     application.add_handler(CommandHandler("perguntar", cmd_perguntar, filters=owner_only))
     application.add_handler(CommandHandler("editar", cmd_editar, filters=owner_only))
     application.add_handler(CommandHandler("review", cmd_review, filters=owner_only))
+    application.add_handler(CommandHandler("calibrar", cmd_calibrar, filters=owner_only))
     application.add_handler(CommandHandler("export", cmd_export, filters=owner_only))
     application.add_handler(
         MessageHandler(owner_only & filters.TEXT & ~filters.COMMAND, handle_text)

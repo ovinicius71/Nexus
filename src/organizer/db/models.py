@@ -151,3 +151,19 @@ class Review(Base):
     period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     content_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class AppSetting(Base):
+    """A small key-value store for learned/runtime settings (Phase 6+).
+
+    Used, e.g., to persist the similarity threshold calibrated from the user's
+    connection feedback, overriding the static value from ``.env``.
+    """
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )

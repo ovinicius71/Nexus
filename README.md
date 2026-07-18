@@ -37,6 +37,7 @@ src/organizer/
 ├── embeddings.py      # Embedder local (sentence-transformers, offline)
 ├── semantic.py        # SemanticIndex sobre sqlite-vec (busca por similaridade)
 ├── review.py          # monta o snapshot da semana, orquestra e renderiza o review
+├── calibrate.py       # calibra o limiar de conexões pelo feedback (F1-ótimo)
 ├── bot/app.py         # handlers do Telegram: texto, card, consultas, conexões, review, export
 ├── export.py          # export para o vault do Obsidian (idempotente)
 └── main.py            # entrypoint
@@ -128,6 +129,7 @@ O script reporta a acurácia por campo (tipo, prazo, prioridade, projeto, pessoa
   prazo, prioridade, projeto, status); correções de tipo/prazo/prioridade alimentam o few-shot da
   classificação. Quando a entrada é ambígua, o bot mostra as candidatas para você escolher pelo `#id`.
 - `/review` — gera a **análise da semana** com Claude Sonnet (ver seção abaixo).
+- `/calibrar` — **aprende o limiar de conexões** a partir do seu feedback (ver seção abaixo).
 
 ### Memória semântica e conexões (Fase 5)
 
@@ -167,6 +169,18 @@ fuso `TIMEZONE`) e, **só quando o histórico é rico o bastante** (`REVIEW_MIN_
 `REVIEW_MIN_WEEKS` semanas de uso — padrão 200 ou 4), gera o review e **envia sozinho** no Telegram.
 Abaixo desse limiar, ele não incomoda. Desligue com `REVIEW_AUTO_ENABLED=false` (o `/review` manual
 continua funcionando). Cada review é salvo no banco (tabela `reviews`) e vai para o export do Obsidian.
+
+### Calibração do limiar de conexões (Fase 10)
+
+Cada sugestão de conexão guarda a **similaridade** e se você **aceitou ou rejeitou** (tabela
+`connections`). Tratando aceitas como positivos e rejeitadas como negativos, o `/calibrar` encontra
+o **limiar que melhor separa os dois (F1 máximo)** e passa a usá-lo no lugar do `SIMILARITY_THRESHOLD`
+fixo — um mini-ciclo de ML fechado com os seus próprios dados (coleta → treino → uso). O limiar
+aprendido fica na tabela `app_settings`; a sugestão de conexões lê ele primeiro (fallback pro `.env`).
+
+- Precisa de pelo menos `CALIBRATION_MIN_SAMPLES` conexões decididas, com as duas classes presentes;
+  abaixo disso o bot avisa que precisa de mais feedback.
+- Também roda por script: `python -m organizer.calibrate`.
 
 ### Export para o Obsidian (Fase 4)
 
@@ -243,4 +257,5 @@ sqlite3 organizer.db "select id, raw_text, created_at from entries;"
 - **Fase 8:** ✅ edição em linguagem natural (`/editar <instrução>` com resolução automática da
   entrada por similaridade, ou `/editar #id …`; Claude Haiku).
 - **Fase 9:** ✅ `/perguntar` — RAG conversacional sobre as notas (retrieval + Claude Sonnet).
-- **Fase 10:** calibração do limiar de similaridade a partir do feedback de conexões.
+- **Fase 10:** ✅ calibração do limiar de similaridade a partir do feedback de conexões
+  (`/calibrar` — limiar F1-ótimo, aprendido e persistido; `python -m organizer.calibrate`).

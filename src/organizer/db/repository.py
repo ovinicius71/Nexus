@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..llm.classifier import CorrectionExample
 from ..llm.schema import EntryClassification
-from .models import Connection, Correction, Entry, EntryPerson, Person, Review
+from .models import AppSetting, Connection, Correction, Entry, EntryPerson, Person, Review
 
 
 class EntryRepository:
@@ -166,6 +166,27 @@ class EntryRepository:
         self._session.commit()
         self._session.refresh(connection)
         return connection
+
+    def list_connection_feedback(self) -> list[tuple[float, bool]]:
+        """Decided connections as ``(similarity, accepted)`` pairs (for calibration)."""
+        stmt = select(Connection.similarity, Connection.accepted).where(
+            Connection.accepted.is_not(None)
+        )
+        return [(sim, bool(acc)) for sim, acc in self._session.execute(stmt)]
+
+    def get_setting(self, key: str) -> str | None:
+        """Return a stored app setting value, or ``None`` if unset."""
+        row = self._session.get(AppSetting, key)
+        return row.value if row is not None else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Insert or update an app setting."""
+        row = self._session.get(AppSetting, key)
+        if row is None:
+            self._session.add(AppSetting(key=key, value=value))
+        else:
+            row.value = value
+        self._session.commit()
 
     def get_related(self, entry_id: int) -> list[Entry]:
         """Entries linked to ``entry_id`` via an accepted connection (either direction)."""

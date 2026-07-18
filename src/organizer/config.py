@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     # at least this many entries OR this many weeks of use.
     review_min_entries: int = 200
     review_min_weeks: int = 4
+    # Phase 10: minimum decided connections before calibrating the threshold.
+    calibration_min_samples: int = 10
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(
