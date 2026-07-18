@@ -26,6 +26,7 @@ BOT_COMMANDS = [
     BotCommand("ideias", "Suas ideias"),
     BotCommand("eventos", "Seus eventos"),
     BotCommand("buscar", "Buscar por termo"),
+    BotCommand("editar", "Editar uma entrada por texto"),
     BotCommand("review", "Análise da semana (IA)"),
     BotCommand("export", "Exportar para o Obsidian"),
 ]
@@ -36,6 +37,7 @@ from ..db.repository import EntryRepository
 from ..embeddings import Embedder
 from ..export import VaultExporter
 from ..llm.classifier import Classifier
+from ..llm.editor import Editor
 from ..llm.insights import ReviewAnalyzer
 from ..llm.search import Candidate, SearchRanker
 from ..review import render_review, run_review, trigger_met, weeks_of_use
@@ -169,6 +171,10 @@ def _search_ranker(context: ContextTypes.DEFAULT_TYPE) -> SearchRanker | None:
 
 def _review_analyzer(context: ContextTypes.DEFAULT_TYPE) -> ReviewAnalyzer | None:
     return context.application.bot_data.get("review_analyzer")
+
+
+def _editor(context: ContextTypes.DEFAULT_TYPE) -> Editor | None:
+    return context.application.bot_data.get("editor")
 
 
 def _now_utc_naive() -> datetime:
@@ -504,6 +510,144 @@ async def _buscar_hybrid(update: Update, context: ContextTypes.DEFAULT_TYPE, ter
     await update.message.reply_text("\n\n".join(sections))
 
 
+# --- natural-language edit (Phase 8) ---------------------------------------
+
+
+def _entry_state_for_edit(entry: Entry, people: list[str]) -> str:
+    due = entry.due_date.date().isoformat() if entry.due_date else "null"
+    return "\n".join(
+        [
+            f"- tipo: {entry.type or 'null'}",
+            f"- titulo: {entry.title or 'null'}",
+            f"- prazo: {due}",
+            f"- prioridade: {entry.priority or 'null'}",
+            f"- projeto: {entry.project or 'null'}",
+            f"- status: {entry.status or 'null'}",
+            f"- texto: {entry.raw_text}",
+        ]
+    )
+
+
+def _candidate_summary(entry: Entry) -> str:
+    """One-line description of an entry, shown to the model when resolving a target."""
+    due = entry.due_date.date().isoformat() if entry.due_date else "sem prazo"
+    return (
+        f"[{entry.type or 'note'}] \"{entry.title or entry.raw_text[:40]}\" | "
+        f"prazo: {due} | prioridade: {entry.priority or '—'} | "
+        f"status: {entry.status or '—'} | texto: {entry.raw_text[:60]}"
+    )
+
+
+def _parse_edit_args(args: list[str] | None) -> tuple[int | None, str]:
+    """Parse ``/editar`` args into ``(entry_id | None, instruction)``.
+
+    ``/editar #12 adia pra sexta`` → ``(12, "adia pra sexta")`` (explicit id);
+    ``/editar adia o relatório pra sexta`` → ``(None, "adia o relatório…")``
+    (natural: the target is resolved from the text).
+    """
+    if not args:
+        return None, ""
+    raw_id = args[0].lstrip("#")
+    if raw_id.isdigit():
+        return int(raw_id), " ".join(args[1:]).strip()
+    return None, " ".join(args).strip()
+
+
+async def cmd_editar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Edit an entry from a natural-language instruction (Claude Haiku).
+
+    The entry can be named by ``#id`` or just described in words.
+    """
+    editor = _editor(context)
+    if editor is None:
+        await update.message.reply_text("✏️ Edição indisponível — defina ANTHROPIC_API_KEY.")
+        return
+    entry_id, instruction = _parse_edit_args(context.args)
+    if not instruction:
+        await update.message.reply_text(
+            "Uso: /editar <o que mudar> — eu descubro a entrada pelo texto.\n"
+            "Ou /editar #<id> <o que mudar> para apontar direto.\n"
+            "Ex.: /editar adia o relatório pra sexta e marca alta"
+        )
+        return
+    if entry_id is not None:
+        await _edit_by_id(update, context, editor, entry_id, instruction)
+    else:
+        await _edit_natural(update, context, editor, instruction)
+
+
+async def _edit_by_id(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, editor: Editor,
+    entry_id: int, instruction: str,
+) -> None:
+    with _session_factory(context)() as session:
+        repo = EntryRepository(session)
+        entry = repo.get_by_id(entry_id)
+        if entry is None:
+            await update.message.reply_text(f"Não encontrei a entrada #{entry_id}.")
+            return
+        state = _entry_state_for_edit(entry, repo.get_people(entry))
+    try:
+        edit = await asyncio.to_thread(editor.edit, state, instruction)
+    except Exception:
+        logger.exception("Edit failed for entry id=%s", entry_id)
+        await update.message.reply_text("⚠️ Não consegui interpretar a edição agora (erro na IA).")
+        return
+    await _apply_edit_and_reply(update, context, entry_id, edit)
+
+
+async def _edit_natural(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, editor: Editor, instruction: str
+) -> None:
+    embedder = _embedder(context)
+    with _session_factory(context)() as session:
+        repo = EntryRepository(session)
+        if embedder is not None:
+            vector = await asyncio.to_thread(embedder.encode, instruction)
+            matches = _semantic_index(context, session).search(vector, k=6)
+            candidates = repo.get_by_ids([mid for mid, _ in matches])
+        else:
+            candidates = repo.list_recent(10)
+        pairs = [(e.id, _candidate_summary(e)) for e in candidates]
+        candidate_ids = {e.id for e in candidates}
+        fallback_lines = [format_entry_line(e) for e in candidates]
+    if not pairs:
+        await update.message.reply_text("Ainda não há entradas para editar. ✍️")
+        return
+    try:
+        edit = await asyncio.to_thread(editor.resolve_and_edit, pairs, instruction)
+    except Exception:
+        logger.exception("Edit resolution failed")
+        await update.message.reply_text("⚠️ Não consegui interpretar a edição agora (erro na IA).")
+        return
+    if edit.target_id is None or edit.target_id not in candidate_ids:
+        await update.message.reply_text(
+            "🤔 Não tenho certeza de qual entrada você quer editar. "
+            "Tente de novo ou use `/editar #<id> …`:\n" + "\n".join(fallback_lines)
+        )
+        return
+    await _apply_edit_and_reply(update, context, edit.target_id, edit)
+
+
+async def _apply_edit_and_reply(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, entry_id: int, edit
+) -> None:
+    changed = edit.clean_fields()
+    if not changed:
+        await update.message.reply_text("Não identifiquei nada para mudar nessa instrução. 🤔")
+        return
+    with _session_factory(context)() as session:
+        repo = EntryRepository(session)
+        entry = repo.get_by_id(entry_id)
+        if entry is None:
+            await update.message.reply_text(f"A entrada #{entry_id} sumiu.")
+            return
+        repo.apply_edit(entry, edit)
+        people = repo.get_people(entry)
+        text = render_card(entry, people, f"✏️ Editado: {', '.join(changed)}.")
+    await update.message.reply_text(text, reply_markup=main_keyboard(entry_id))
+
+
 async def on_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     connection_id = int(query.data.split(":")[1])
@@ -646,6 +790,7 @@ def build_application(
     embedder: Embedder | None = None,
     search_ranker: SearchRanker | None = None,
     review_analyzer: ReviewAnalyzer | None = None,
+    editor: Editor | None = None,
 ) -> Application:
     """Wire up the Telegram application with handlers restricted to the owner chat."""
     application = (
@@ -661,6 +806,7 @@ def build_application(
     application.bot_data["search_threshold"] = settings.search_threshold
     application.bot_data["search_ranker"] = search_ranker
     application.bot_data["review_analyzer"] = review_analyzer
+    application.bot_data["editor"] = editor
     application.bot_data["timezone"] = settings.timezone
     application.bot_data["review_weekday"] = settings.review_weekday
     application.bot_data["review_min_entries"] = settings.review_min_entries
@@ -675,6 +821,7 @@ def build_application(
     application.add_handler(CommandHandler("ideias", cmd_ideias, filters=owner_only))
     application.add_handler(CommandHandler("eventos", cmd_eventos, filters=owner_only))
     application.add_handler(CommandHandler("buscar", cmd_buscar, filters=owner_only))
+    application.add_handler(CommandHandler("editar", cmd_editar, filters=owner_only))
     application.add_handler(CommandHandler("review", cmd_review, filters=owner_only))
     application.add_handler(CommandHandler("export", cmd_export, filters=owner_only))
     application.add_handler(

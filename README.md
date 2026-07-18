@@ -42,6 +42,7 @@ src/organizer/
 └── main.py            # entrypoint
 prompts/classify.md    # prompt de classificação (versionável)
 prompts/search.md      # prompt do filtro de busca (Haiku)
+prompts/edit.md        # prompt da edição em linguagem natural (Haiku)
 prompts/review.md      # prompt do review semanal (Sonnet)
 evals/                 # mini-eval de acurácia por campo
 tests/                 # testes de repositório e do classificador (LLM mockado)
@@ -115,6 +116,12 @@ O script reporta a acurácia por campo (tipo, prazo, prioridade, projeto, pessoa
   para sair"* (conceito de sair), enquanto `joão` continua só com as notas do João. Com
   `SEARCH_RERANK=false`, cai numa **busca híbrida local** (sem custo de API): **Resultados** exatos
   primeiro, depois **Relacionados** por similaridade acima de `SEARCH_THRESHOLD` (padrão `0.45`).
+- `/editar <instrução>` — **edição em linguagem natural** (Claude Haiku). Você só descreve a
+  mudança e o bot **descobre a entrada pelo texto** (busca as candidatas por similaridade e o
+  modelo escolhe qual). Ex.: `/editar adia o relatório pra sexta e marca alta`. Se preferir apontar
+  direto, `/editar #<id> <instrução>`. O modelo traduz a frase em mudanças de campos (tipo, título,
+  prazo, prioridade, projeto, status); correções de tipo/prazo/prioridade alimentam o few-shot da
+  classificação. Quando a entrada é ambígua, o bot mostra as candidatas para você escolher pelo `#id`.
 - `/review` — gera a **análise da semana** com Claude Sonnet (ver seção abaixo).
 
 ### Memória semântica e conexões (Fase 5)
@@ -220,6 +227,7 @@ sqlite3 organizer.db "select id, raw_text, created_at from entries;"
 - **Fase 6:** ✅ insights e proatividade — `/review` semanal com Claude Sonnet, review automático
   agendado (JobQueue, gatilho de 200+ entradas ou 4+ semanas) e reviews salvos no banco e no Obsidian.
 - **Fase 7:** ✅ `/dia` — tarefas com prazo hoje/atrasadas + eventos do dia.
-- **Fase 8:** edição em linguagem natural (`/editar`).
+- **Fase 8:** ✅ edição em linguagem natural (`/editar <instrução>` com resolução automática da
+  entrada por similaridade, ou `/editar #id …`; Claude Haiku).
 - **Fase 9:** `/perguntar` — RAG conversacional sobre as notas (Sonnet).
 - **Fase 10:** calibração do limiar de similaridade a partir do feedback de conexões.

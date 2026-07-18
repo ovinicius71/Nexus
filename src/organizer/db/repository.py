@@ -266,6 +266,30 @@ class EntryRepository:
         self._session.refresh(entry)
         return correction
 
+    def apply_edit(self, entry: Entry, edit) -> Entry:
+        """Apply a natural-language :class:`EntryEdit` to an entry.
+
+        Changes to ``type`` / ``priority`` / ``due_date`` also go through
+        :meth:`record_correction`, so they feed the classifier's few-shot memory.
+        """
+        for field in edit.clean_fields():
+            value = getattr(edit, field)
+            if field == "type":
+                self.record_correction(entry, "type", value.value if value else None)
+            elif field == "priority":
+                self.record_correction(entry, "priority", value.value if value else None)
+            elif field == "due_date":
+                self.record_correction(entry, "due_date", value.isoformat() if value else None)
+            elif field == "title":
+                entry.title = value
+            elif field == "project":
+                entry.project = value
+            elif field == "status":
+                entry.status = value
+        self._session.commit()
+        self._session.refresh(entry)
+        return entry
+
     def get_recent_corrections(self, limit: int = 10) -> list[CorrectionExample]:
         """Return the most recent corrections as few-shot examples (newest first)."""
         stmt = (
