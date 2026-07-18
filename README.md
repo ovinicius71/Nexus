@@ -43,6 +43,7 @@ src/organizer/
 prompts/classify.md    # prompt de classificação (versionável)
 prompts/search.md      # prompt do filtro de busca (Haiku)
 prompts/edit.md        # prompt da edição em linguagem natural (Haiku)
+prompts/qa.md          # prompt do RAG conversacional /perguntar (Sonnet)
 prompts/review.md      # prompt do review semanal (Sonnet)
 evals/                 # mini-eval de acurácia por campo
 tests/                 # testes de repositório e do classificador (LLM mockado)
@@ -116,6 +117,10 @@ O script reporta a acurácia por campo (tipo, prazo, prioridade, projeto, pessoa
   para sair"* (conceito de sair), enquanto `joão` continua só com as notas do João. Com
   `SEARCH_RERANK=false`, cai numa **busca híbrida local** (sem custo de API): **Resultados** exatos
   primeiro, depois **Relacionados** por similaridade acima de `SEARCH_THRESHOLD` (padrão `0.45`).
+- `/perguntar <pergunta>` — **RAG conversacional** sobre suas notas (Claude Sonnet). Recupera as
+  entradas mais relevantes por similaridade e o modelo **responde ancorado nelas**, citando `#id` e
+  data. Ex.: `/perguntar o que andei pensando sobre o TCC?`. Se nada for relevante, ele diz que não
+  achou (não inventa). Ver seção abaixo.
 - `/editar <instrução>` — **edição em linguagem natural** (Claude Haiku). Você só descreve a
   mudança e o bot **descobre a entrada pelo texto** (busca as candidatas por similaridade e o
   modelo escolhe qual). Ex.: `/editar adia o relatório pra sexta e marca alta`. Se preferir apontar
@@ -135,6 +140,14 @@ Obsidian.
 
 - Primeiro uso baixa o modelo (`EMBEDDING_MODEL`, ~120 MB) uma vez.
 - Entradas antigas são indexadas automaticamente ao iniciar o bot.
+
+### Perguntar às notas — RAG (Fase 9)
+
+`/perguntar <pergunta>` faz **retrieval-augmented generation** sobre o seu banco: embedo a
+pergunta, recupero as **top-k entradas** mais parecidas no `sqlite-vec`, monto o contexto (id, data,
+tipo, projeto, pessoas, texto) e o **Sonnet responde em PT ancorado só nessas notas**, citando
+`#id`/data. É *stateless* (uma pergunta por vez). Regra anti-alucinação: se o contexto não cobre a
+pergunta, ele avisa que não encontrou — não inventa. Cada pergunta é 1 chamada Sonnet.
 
 ### Review semanal e proatividade (Fase 6)
 
@@ -229,5 +242,5 @@ sqlite3 organizer.db "select id, raw_text, created_at from entries;"
 - **Fase 7:** ✅ `/dia` — tarefas com prazo hoje/atrasadas + eventos do dia.
 - **Fase 8:** ✅ edição em linguagem natural (`/editar <instrução>` com resolução automática da
   entrada por similaridade, ou `/editar #id …`; Claude Haiku).
-- **Fase 9:** `/perguntar` — RAG conversacional sobre as notas (Sonnet).
+- **Fase 9:** ✅ `/perguntar` — RAG conversacional sobre as notas (retrieval + Claude Sonnet).
 - **Fase 10:** calibração do limiar de similaridade a partir do feedback de conexões.

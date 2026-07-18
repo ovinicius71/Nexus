@@ -13,6 +13,7 @@ from .embeddings import Embedder
 from .llm.classifier import Classifier
 from .llm.editor import Editor
 from .llm.insights import ReviewAnalyzer
+from .llm.qa import Answerer
 from .llm.search import SearchRanker
 from .logging_setup import setup_logging
 from .semantic import SemanticIndex
@@ -53,10 +54,11 @@ def main() -> None:
     ranker = SearchRanker(api_key=settings.anthropic_api_key) if settings.search_rerank else None
     analyzer = ReviewAnalyzer(api_key=settings.anthropic_api_key, model=settings.insights_model)
     editor = Editor(api_key=settings.anthropic_api_key)
+    answerer = Answerer(api_key=settings.anthropic_api_key, model=settings.insights_model)
     _build_semantic_index(session_factory, embedder)
 
     application = build_application(
-        settings, session_factory, classifier, embedder, ranker, analyzer, editor
+        settings, session_factory, classifier, embedder, ranker, analyzer, editor, answerer
     )
     logger.info("Starting bot (allowed chat id=%s)", settings.allowed_chat_id)
     application.run_polling()

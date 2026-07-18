@@ -26,6 +26,7 @@ BOT_COMMANDS = [
     BotCommand("ideias", "Suas ideias"),
     BotCommand("eventos", "Seus eventos"),
     BotCommand("buscar", "Buscar por termo"),
+    BotCommand("perguntar", "Perguntar às suas notas (IA)"),
     BotCommand("editar", "Editar uma entrada por texto"),
     BotCommand("review", "Análise da semana (IA)"),
     BotCommand("export", "Exportar para o Obsidian"),
@@ -39,6 +40,7 @@ from ..export import VaultExporter
 from ..llm.classifier import Classifier
 from ..llm.editor import Editor
 from ..llm.insights import ReviewAnalyzer
+from ..llm.qa import Answerer
 from ..llm.search import Candidate, SearchRanker
 from ..review import render_review, run_review, trigger_met, weeks_of_use
 from ..semantic import SemanticIndex
@@ -175,6 +177,10 @@ def _review_analyzer(context: ContextTypes.DEFAULT_TYPE) -> ReviewAnalyzer | Non
 
 def _editor(context: ContextTypes.DEFAULT_TYPE) -> Editor | None:
     return context.application.bot_data.get("editor")
+
+
+def _answerer(context: ContextTypes.DEFAULT_TYPE) -> Answerer | None:
+    return context.application.bot_data.get("answerer")
 
 
 def _now_utc_naive() -> datetime:
@@ -510,6 +516,63 @@ async def _buscar_hybrid(update: Update, context: ContextTypes.DEFAULT_TYPE, ter
     await update.message.reply_text("\n\n".join(sections))
 
 
+# --- Q&A over notes (RAG, Phase 9) -----------------------------------------
+
+_QA_TOP_K = 8
+
+
+def _build_qa_context(entries: list[Entry], repo: EntryRepository) -> str:
+    """Format retrieved entries as grounding context for the answerer."""
+    lines = []
+    for e in entries:
+        people = ", ".join(repo.get_people(e)) or "—"
+        created = e.created_at.date().isoformat()
+        due = e.due_date.date().isoformat() if e.due_date else "—"
+        lines.append(
+            f"#{e.id} ({created}, {e.type or 'note'}, projeto: {e.project or '—'}, "
+            f"pessoas: {people}, prazo: {due}): {e.raw_text}"
+        )
+    return "\n".join(lines)
+
+
+async def cmd_perguntar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Answer a free-text question grounded in the user's notes (RAG + Sonnet)."""
+    answerer = _answerer(context)
+    embedder = _embedder(context)
+    if answerer is None or embedder is None:
+        await update.message.reply_text(
+            "🔎 Consulta indisponível — precisa de ANTHROPIC_API_KEY e do índice semântico."
+        )
+        return
+    question = " ".join(context.args).strip() if context.args else ""
+    if not question:
+        await update.message.reply_text(
+            "Uso: /perguntar <sua pergunta>\nEx.: /perguntar o que andei pensando sobre o TCC?"
+        )
+        return
+
+    await update.message.reply_text("🔎 Consultando suas notas…")
+    with _session_factory(context)() as session:
+        repo = EntryRepository(session)
+        vector = await asyncio.to_thread(embedder.encode, question)
+        matches = _semantic_index(context, session).search(vector, k=_QA_TOP_K)
+        entries = repo.get_by_ids([mid for mid, _ in matches])
+        if not entries:
+            await update.message.reply_text("Ainda não há notas para consultar. 🗒️")
+            return
+        qa_context = _build_qa_context(entries, repo)
+
+    try:
+        answer = await asyncio.to_thread(answerer.answer, question, qa_context)
+    except Exception:
+        logger.exception("Q&A failed")
+        await update.message.reply_text(
+            "⚠️ Não consegui responder agora (erro na IA). Tente mais tarde."
+        )
+        return
+    await update.message.reply_text(answer)
+
+
 # --- natural-language edit (Phase 8) ---------------------------------------
 
 
@@ -791,6 +854,7 @@ def build_application(
     search_ranker: SearchRanker | None = None,
     review_analyzer: ReviewAnalyzer | None = None,
     editor: Editor | None = None,
+    answerer: Answerer | None = None,
 ) -> Application:
     """Wire up the Telegram application with handlers restricted to the owner chat."""
     application = (
@@ -807,6 +871,7 @@ def build_application(
     application.bot_data["search_ranker"] = search_ranker
     application.bot_data["review_analyzer"] = review_analyzer
     application.bot_data["editor"] = editor
+    application.bot_data["answerer"] = answerer
     application.bot_data["timezone"] = settings.timezone
     application.bot_data["review_weekday"] = settings.review_weekday
     application.bot_data["review_min_entries"] = settings.review_min_entries
@@ -821,6 +886,7 @@ def build_application(
     application.add_handler(CommandHandler("ideias", cmd_ideias, filters=owner_only))
     application.add_handler(CommandHandler("eventos", cmd_eventos, filters=owner_only))
     application.add_handler(CommandHandler("buscar", cmd_buscar, filters=owner_only))
+    application.add_handler(CommandHandler("perguntar", cmd_perguntar, filters=owner_only))
     application.add_handler(CommandHandler("editar", cmd_editar, filters=owner_only))
     application.add_handler(CommandHandler("review", cmd_review, filters=owner_only))
     application.add_handler(CommandHandler("export", cmd_export, filters=owner_only))
